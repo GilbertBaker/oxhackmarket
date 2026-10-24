@@ -588,3 +588,19 @@ Timescale features.
              sport and general news dropped (Cuppers is hard to scrape). Added
              races table, candidate markets (markets.race_id/candidate), race
              endpoints, race-level admin/briefs, and timemachine returning races.
+  2026-10-24 [A] Engine/trading MVP landed on branch `engine`. Small additions,
+             nothing removed:
+             - trading.place_order sends NEW for the market itself, so an
+               'open' market is always tradable even if open_market wasn't
+               called. Calling open_race/open_market is still correct.
+             - engine.py falls back to a pure-Python book (same protocol) if
+               ENGINE_PATH is missing, so B/C can run the app without building
+               C++. Logged at ERROR. Use the real exe for the demo.
+             - OPTIONAL db function for B: user_orders(user_id, limit=100)
+               -> list[dict], all statuses, newest first. GET /api/orders?status=all
+               uses it if present, otherwise returns open orders only.
+             - Portfolio positions also carry race_id, candidate, position
+               (as in AGENT_A A7).
+             - trading_api.race_json(race) builds the Race JSON for A's admin
+               responses (uses db.race_markets(...)["price"] if present, else
+               db.current_price). B may reuse it or A can switch to B's helper.
