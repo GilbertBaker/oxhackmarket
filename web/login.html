@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap">
+  <div class="auth-wrap">
+    <div class="card auth-card">
+      <div class="seg" role="tablist" aria-label="Account">
+        <button type="button" role="tab" id="tab-login" aria-selected="true" aria-controls="auth-form">Log in</button>
+        <button type="button" role="tab" id="tab-register" aria-selected="false" aria-controls="auth-form">Sign up</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <h1 id="auth-title" style="font-size:22px;margin-top:14px">Welcome back</h1>
+        <p class="muted small" id="auth-sub">Log in to trade Cuppers matches.</p>
+        <label for="username">Username</label>
+        <input class="input" id="username" name="username" autocomplete="username" required minlength="3" maxlength="20" pattern="[A-Za-z0-9_]{3,20}">
+        <label for="password">Password</label>
+        <input class="input" id="password" name="password" type="password" autocomplete="current-password" required minlength="6">
+        <p class="tiny faint" id="auth-hint" hidden style="margin-top:6px">Username: 3–20 letters, digits or _. Password: at least 6 characters.</p>
+        <div id="auth-msg" aria-live="polite"></div>
+        <button class="btn btn-primary btn-block btn-lg" id="auth-submit" type="submit" style="margin-top:16px">Log in</button>
+      </form>
+    </div>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/login.js"></script>
+</body>
+</html>

@@ -642,3 +642,30 @@ Timescale features.
              insert_portfolio_snapshot, user_orders(user_id, status), user_positions rows include
              question/candidate/race_id/status/outcome/price. data_api exports race_json /
              market_json / user_json serializers for COLLAB 9 shapes (C's admin endpoints).
+  2026-10-24 23:55 [C] SCOPE CHANGE from the owner: Oxford Union elections are OUT,
+             Cuppers (college sport) is IN. Markets are created and resolved BY HAND
+             in the admin portal: no scraping, no Gemini race extraction, no Gemini
+             result suggestions. The schema and API shapes stay the same; only the
+             meaning changes:
+             - race = ONE Cuppers match. election = term ("Michaelmas 2026"),
+               position = "<Competition>: <Home> vs <Away>" (e.g. "Men's Football
+               Cuppers: Keble vs Worcester"), description = "<Round> · <Competition>"
+               (round may be omitted), seats = 1, closes_at = kick-off (trading
+               stops then; B's auto-close job already does this).
+             - candidates = the possible results: "<Home>", "Draw" (only where a
+               draw can happen), "<Away>". Exact names; the UI parses the position
+               and matches outcomes by name. category 'cuppers'.
+             - NO RON. POST /api/admin/races must not add one (A: call
+               create_race(..., add_ron=False) or make that the default).
+             - POST /api/admin/races also accepts optional "description".
+             - Suggested question text: "Will <Home> beat <Away> (<Competition>,
+               <Term>)?" and "Will <Home> vs <Away> end in a draw (...)?"
+             - Results: the admin page calls POST /api/admin/races/<id>/close (if
+               still open) then POST /api/admin/races/<id>/resolve
+               {"winner_market_ids":[one id]}. Both endpoints are A's (they already exist).
+             - The frontend no longer calls /api/admin/proposed, /approve, /reject,
+               /scrape or /suggest-result. /api/articles, /api/digest and race briefs
+               are optional: the UI hides them when they're empty or null.
+             - GET /api/races: sort by closes_at (kick-off) only.
+             Frontend (web/**) is built against this, white background with
+             dark-blue accents. Mock mode: any page with ?mock=1, or file://.

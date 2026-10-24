@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time Machine · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap">
+  <section class="tm-hero">
+    <div>
+      <div class="eyebrow">Time Machine</div>
+      <h1>Replay the term as it happened</h1>
+      <p class="muted">Drag through Michaelmas or press play to watch every match's odds move. The bars show what the market believed at that moment, and favourites re-sort as they change.</p>
+    </div>
+    <div class="tm-clock" aria-live="polite">
+      <div class="tm-date" id="tm-date">–</div>
+      <div class="tm-time num" id="tm-time">–</div>
+    </div>
+  </section>
+
+  <section class="card card-pad tm-controls-card">
+    <div class="tm-controls">
+      <button class="btn btn-primary tm-play" id="tm-play" type="button" aria-label="Play">▶</button>
+      <div class="tm-track">
+        <div class="tm-markers" id="tm-markers"></div>
+        <input type="range" id="tm-slider" min="0" max="1000" value="1000" step="1" aria-label="Point in time" disabled>
+      </div>
+      <label for="tm-speed" class="sr-only">Playback speed</label>
+      <select id="tm-speed" class="input input-sm">
+        <option value="1">1×</option>
+        <option value="3" selected>3×</option>
+        <option value="10">10×</option>
+      </select>
+      <button class="btn btn-ghost btn-sm" id="tm-now" type="button">Now</button>
+    </div>
+    <div class="tm-scale"><span id="tm-start"></span><span>◆ = new favourite</span><span id="tm-end"></span></div>
+  </section>
+
+  <div class="layout">
+    <div>
+      <div class="race-grid" id="tm-races"></div>
+      <div class="empty card" id="tm-empty">Loading…</div>
+    </div>
+    <aside class="col-side">
+      <section class="card card-pad">
+        <h2 style="margin-bottom:6px">At this moment</h2>
+        <ul class="headlines tm-summary" id="tm-summary"></ul>
+      </section>
+      <section class="card card-pad" id="tm-news-card" hidden>
+        <h2>Headlines as of then</h2>
+        <ul class="headlines" id="tm-articles"></ul>
+      </section>
+    </aside>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/timemachine.js"></script>
+</body>
+</html>
