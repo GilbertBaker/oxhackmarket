@@ -68,6 +68,31 @@ class FakeDB:
     def adjust_cash(self, uid, delta, conn=None):
         self.users[uid]["cash"] += delta
 
+    def create_user(self, username, pw_hash, is_admin=False):
+        return self.get_user(self.add_user(username, is_admin=is_admin))
+
+    def get_user_by_username(self, name):
+        return next((dict(u) for u in self.users.values() if u["username"] == name), None)
+
+    def list_users(self, include_bots=False):
+        return [dict(u) for u in self.users.values() if include_bots or not u["is_bot"]]
+
+    def create_race(self, fields):
+        rid = next(self._ids)
+        self.races[rid] = {"id": rid, "seats": 1, "status": "proposed", "resolved_at": None,
+                           "source_name": None, "source_url": None, "article_id": None} | dict(fields, id=rid)
+        return rid
+
+    def find_race(self, election, position):
+        return next((dict(r) for r in self.races.values()
+                     if r["election"] == election and r["position"] == position), None)
+
+    def create_market(self, fields):
+        mid = next(self._ids)
+        self.markets[mid] = {"status": "proposed", "outcome": None, "ai_prior": None, "resolved_at": None,
+                             "created_at": datetime.now(timezone.utc)} | dict(fields, id=mid)
+        return mid
+
     def get_race(self, rid):
         return dict(self.races[rid]) if rid in self.races else None
 

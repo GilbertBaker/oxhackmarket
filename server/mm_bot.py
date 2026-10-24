@@ -52,20 +52,28 @@ def quotes(fair, house_position):
 
 
 def requote_market(house_id, market_id, fair):
+    """Returns True if the quotes were replaced, False if the current ones were kept."""
     with trading._engine().lock:
-        for o in db.open_orders(market_id=market_id, user_id=house_id):
+        pos = db.get_position(house_id, market_id)["qty"]
+        bid, ask = quotes(fair, pos)
+        mine = db.open_orders(market_id=market_id, user_id=house_id)
+        current = sorted((o["side"], o["price"], o["qty_remaining"]) for o in mine)
+        if current == [("buy", bid, SIZE), ("sell", ask, SIZE)]:
+            return False   # already quoting exactly this: no DB writes, lock released quickly
+        for o in mine:
             try:
                 trading.cancel_order(house_id, o["id"], is_admin=True)
             except trading.TradingError:
                 pass
-        pos = db.get_position(house_id, market_id)["qty"]
-        bid, ask = quotes(fair, pos)
         trading.place_order(house_id, market_id, "YES", "buy", "limit", bid, SIZE)
         trading.place_order(house_id, market_id, "YES", "sell", "limit", ask, SIZE)
+        return True
 
 
 def requote_all():
+    """One pass over every open race. Returns the number of markets requoted."""
     house_id = db.ensure_bot_user()
+    changed = 0
     for race in db.list_races(status="open"):
         try:
             markets = [m for m in db.race_markets(race["id"]) if m["status"] == "open"]
@@ -77,9 +85,10 @@ def requote_all():
             continue
         for m in markets:
             try:
-                requote_market(house_id, m["id"], fairs[m["id"]])
+                changed += requote_market(house_id, m["id"], fairs[m["id"]])
             except Exception:
                 log.exception("requote failed for market %s", m["id"])
+    return changed
 
 
 def _loop():

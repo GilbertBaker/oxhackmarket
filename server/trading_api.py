@@ -191,3 +191,17 @@ def admin_resolve_market(user, market_id):
     except trading.TradingError as e:
         return _err(str(e), 404 if "not found" in str(e) else 400)
     return jsonify({"market": _market_json(db.get_market(market_id))})
+
+
+@bp.get("/api/admin/invariants")
+@admin_required
+def admin_invariants(user):
+    problems = trading.check_invariants()
+    return jsonify({"ok": not problems, "problems": problems})
+
+
+@bp.post("/api/admin/mm/requote")
+@admin_required
+def admin_mm_requote(user):
+    import mm_bot
+    return jsonify({"requoted": mm_bot.requote_all()})

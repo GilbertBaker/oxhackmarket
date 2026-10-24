@@ -335,3 +335,148 @@ def resolve_race(race_id, winner_market_ids):
                     continue
                 _settle(m["id"], "YES" if m["id"] in winners else "NO", conn)
             db.update_race(race_id, status="resolved", resolved_at=_now(), conn=conn)
+
+
+# ------------------------------------------- market creation (for B seed + C admin)
+RON_NAME = "RON (Re-Open Nominations)"
+RON_PRIOR = 5
+
+
+def _parse_time(v):
+    if isinstance(v, str):
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+    return v
+
+
+def question_for(candidate, position, election):
+    return f"Will {candidate} be elected {position} ({election})?"
+
+
+def add_candidate(race_id, name, prior=None, **extra):
+    """Create one candidate market in a race (opened in the engine if the race is open).
+    Returns the market id. Raises TradingError if the race is missing or the name is taken."""
+    race = db.get_race(race_id)
+    if race is None:
+        raise TradingError("Race not found")
+    name = (name or "").strip()
+    if not name:
+        raise TradingError("Candidate name required")
+    if any(m["candidate"].lower() == name.lower() for m in db.race_markets(race_id)):
+        raise TradingError(f"{name} is already a candidate")
+    if prior is not None:
+        prior = max(1, min(99, int(prior)))
+    fields = {"race_id": race_id, "candidate": name,
+              "question": question_for(name, race["position"], race["election"]),
+              "resolution_criteria": race["resolution_criteria"], "category": "union",
+              "closes_at": race["closes_at"], "status": race["status"], "ai_prior": prior,
+              "source_name": race.get("source_name"), "source_url": race.get("source_url"),
+              "article_id": race.get("article_id")}
+    fields.update(extra)
+    market_id = db.create_market(fields)
+    if fields["status"] == "open":
+        open_market(market_id)
+    return market_id
+
+
+def create_race(election, position, closes_at, resolution_criteria, candidates, seats=1,
+                status="open", add_ron=True, **extra):
+    """One call to make a whole race: the race row, one market per candidate, RON, and
+    (if status == 'open') the engine books. candidates = [{"name", "prior"}] or [names].
+    extra = any other races column (description, source_name, source_url, article_id,
+    ai_reason, created_by_ai). Returns the race id."""
+    if status not in ("proposed", "open"):
+        raise TradingError("status must be proposed or open")
+    if not candidates:
+        raise TradingError("At least one candidate required")
+    seats = int(seats)
+    if seats < 1:
+        raise TradingError("seats must be >= 1")
+    existing = db.find_race(election, position)
+    if existing:
+        raise TradingError(f"Race already exists (id {existing['id']})")
+    cands = [c if isinstance(c, dict) else {"name": c} for c in candidates]
+    if add_ron and not any(c["name"].strip().upper().startswith("RON") for c in cands):
+        cands.append({"name": RON_NAME, "prior": RON_PRIOR})
+    fields = {"election": election, "position": position, "seats": seats,
+              "closes_at": _parse_time(closes_at), "resolution_criteria": resolution_criteria,
+              "status": status}
+    fields.update(extra)
+    race_id = db.create_race(fields)
+    for c in cands:
+        add_candidate(race_id, c["name"], c.get("prior"))
+    log.info("race %s created: %s %s, %d candidates, status %s",
+             race_id, election, position, len(cands), status)
+    return race_id
+
+
+def approve_race(race_id):
+    """proposed -> open: status on the race and all its markets, then open the books."""
+    race = db.get_race(race_id)
+    if race is None:
+        raise TradingError("Race not found")
+    if race["status"] not in ("proposed", "open"):
+        raise TradingError(f"Race is {race['status']}")
+    db.update_race(race_id, status="open")
+    open_race(race_id)
+
+
+def reject_race(race_id):
+    race = db.get_race(race_id)
+    if race is None:
+        raise TradingError("Race not found")
+    if race["status"] != "proposed":
+        raise TradingError(f"Race is {race['status']}, only proposed races can be rejected")
+    db.update_race(race_id, status="rejected")
+
+
+# --------------------------------------------- live market info (for B's tick job)
+def market_snapshot(market_id):
+    """{"market_id","best_bid","best_ask","last_price"}; bid/ask None when that side is empty."""
+    top = get_book(market_id, 1)
+    return {"market_id": market_id,
+            "best_bid": top["bids"][0]["price"] if top["bids"] else None,
+            "best_ask": top["asks"][0]["price"] if top["asks"] else None,
+            "last_price": db.last_trade_price(market_id)}
+
+
+def snapshot_open_markets():
+    return [market_snapshot(m["id"]) for m in db.list_markets(status="open")]
+
+
+def record_ticks():
+    """Write one price_tick per open market. Convenience for B's 15 s job. Returns count."""
+    snaps = snapshot_open_markets()
+    for s in snaps:
+        db.record_tick(s["market_id"], s["best_bid"], s["best_ask"], s["last_price"])
+    return len(snaps)
+
+
+# ------------------------------------------------------------------ invariants
+def check_invariants():
+    """Returns a list of human-readable problems ([] = all good):
+    per-market positions sum to 0, no negative available cash, engine book == DB open orders."""
+    problems = []
+    eng = _engine()
+    with eng.lock:
+        markets = db.list_markets(status="open") + db.list_markets(status="closed") \
+            + db.list_markets(status="resolved")
+        for m in markets:
+            total = sum(int(p["qty"]) for p in db.market_positions(m["id"]))
+            if total != 0:
+                problems.append(f"market {m['id']}: positions sum to {total}")
+            if m["status"] == "resolved":
+                continue
+            want = {"buy": {}, "sell": {}}
+            for o in db.open_orders(market_id=m["id"]):
+                lv = want[o["side"]]
+                lv[o["price"]] = lv.get(o["price"], 0) + int(o["qty_remaining"])
+            book = get_book(m["id"], 1000)
+            have_b = {l["price"]: l["qty"] for l in book["bids"]}
+            have_s = {l["price"]: l["qty"] for l in book["asks"]}
+            if have_b != want["buy"] or have_s != want["sell"]:
+                problems.append(f"market {m['id']}: engine book {have_b}/{have_s} != DB {want['buy']}/{want['sell']}")
+        for u in db.list_users(include_bots=True):
+            avail = available_cash(u["id"])
+            if avail < 0:
+                problems.append(f"user {u['id']} ({u['username']}): available cash {avail}")
+    return problems
