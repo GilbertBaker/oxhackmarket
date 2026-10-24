@@ -6,6 +6,8 @@
 #define ORDERBOOK_ORDERTREE_H
 #include "OrderList.h"
 #include "../Order.h"
+#include <utility>
+#include <vector>
 
 
 class OrderTree {
@@ -23,6 +25,9 @@ class OrderTree {
     //bool deleteHighestOrder();
     void printLowestLevels(int& printed, int maxLevels);
     void printHighestLevels(int& printed, int maxLevels);
+    //same traversal as the print functions, but collects (price, quantity) pairs
+    void collectLowestLevels(std::vector<std::pair<int,int>>& out, int maxLevels);
+    void collectHighestLevels(std::vector<std::pair<int,int>>& out, int maxLevels);
 
     int getHeight(OrderTree* node);
     int getBalance();

@@ -7,8 +7,19 @@
 #include "OrderTree.h"
 #include <iostream>
 #include <unordered_map>
+#include <vector>
 //#include "../Traders/TraderAlgo.h"
 class TraderAlgo;
+
+//one match between a resting (maker) order and an incoming (taker) order
+struct Fill {
+    int makerOrderID;
+    int makerTraderID;
+    int takerTraderID;
+    int price;
+    int qty;
+    bool takerIsBuy;
+};
 
 class OrderBook {
     public:
@@ -28,6 +39,14 @@ class OrderBook {
         OrderBook();
         void outputOrderBook();
         void cancelOrder(int orderID);
+
+        //levels as (price, total quantity), best price first
+        std::vector<std::pair<int,int>> getDepth(bool bids, int maxLevels);
+        //quantity still resting for an order id, 0 if it isn't in the book
+        int getRestingQty(int orderID) const;
+
+        //appended by the matching loops, drained by the caller
+        std::vector<Fill> fills;
 
         //allows for it to be updated later
         TraderAlgo* algo;

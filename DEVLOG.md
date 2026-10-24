@@ -48,3 +48,16 @@ Append-only. Never rewrite another stream's entries. Format (COLLAB 12):
   rows (except the house user).
 - Endpoints smoke-tested with curl: register/login/logout/me with cookie, races, markets,
   timemachine(+range), leaderboard(+history), /api/stats, JSON 404, 400 on a bad ISO time.
+
+## 2026-10-24 23:40 [A] Engine MVP: C++ MarketServer + Python trading layer
+- A1: the existing book builds with CLion's cmake 4.3.1 + MinGW 15.2 (no CMakeLists changes needed). OrderBookTests pass. Gotcha: a Release build defines NDEBUG, which turns the tests' `assert`s into no-ops, so build Debug for tests.
+- A2: minimal C++ changes, each one necessary: lazy trader creation (getTrader returned nullptr for unknown ids, which would crash for the first web user), a `Fill` vector filled by the 4 matching loops (there was no other way to observe trades), depth collection mirroring the existing print traversal, `getRestingQty`, and the cancel error print moved to stderr. 3 new C++ tests.
+- A3: `MarketServer.exe` speaks the COLLAB 8 protocol. Each market's book lives behind a unique_ptr because `book.algo` points into the struct and the map can rehash. Full `-static` linking fails with this MinGW (winpthread/msvcrt symbols), so we link libgcc/libstdc++ statically and CMake copies libwinpthread-1.dll next to the exe. The scripted protocol test (tests/protocol_input.txt) diffs clean.
+- A4-A8: engine.py (re-entrant lock, auto restart + replay from DB, pure-Python fallback book if the exe is missing so B/C can run without building C++), risk.py (collateral rule), trading.py (all COLLAB 7.1 functions), trading_api.py (all "Trading [A]" endpoints), mm_bot.py (race-normalised quotes).
+- 28 pytest tests on an in-memory fake db, run against BOTH engines: YES vs NO crossing, partial fills, risk rejection that never reaches the engine, market orders capped across 3 levels, cancels, settlement, single/multi-seat and RON race resolution, DB failure -> engine resync, killing the engine process -> replay, MM quotes summing to ~100, and a 300-order random run checking sum(positions)=0, available >= 0 and engine/DB book agreement.
+
+## 2026-10-25 00:30 [A] Integration helpers, faster MM bot, invariants, marketctl CLI
+- trading.py now exposes one-call helpers for everyone else: create_race (race + candidate markets + RON + books), add_candidate, approve/reject_race, market_snapshot / record_ticks for the price-tick job, and check_invariants.
+- The MM bot skips markets where the quote it wants is already resting at full size, so a quiet 10 s pass makes no DB writes and barely holds the engine lock. This matters on cloud Timescale, where every order costs ~10 round trips.
+- server/marketctl.py is an HTTP client, not an in-process tool. The engine's books live in the server process, and a CLI with its own engine would silently diverge from them. Its `sim` command drives simulated traders (drifting beliefs + occasional "news" shocks) through the public API to create realistic price history for the TIME demo.
+- 40 tests, including marketctl end to end over a real local HTTP server (create race -> MM quotes -> market order -> 3-trader sim -> invariant check OK).

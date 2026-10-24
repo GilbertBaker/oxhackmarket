@@ -209,6 +209,46 @@ void OrderTree::printHighestLevels(int& printed, int maxLevels) {
         left->printHighestLevels(printed, maxLevels);
 }
 
+void OrderTree::collectLowestLevels(std::vector<std::pair<int,int>>& out, int maxLevels) {
+    if ((int) out.size() >= maxLevels) return;
+
+    if (left != nullptr)
+        left->collectLowestLevels(out, maxLevels);
+
+    if ((int) out.size() >= maxLevels) return;
+
+    if (ordList !=nullptr) {
+        int quantity = ordList->CalcOrders();
+
+        if (quantity > 0) {
+            out.emplace_back(ordList->price, quantity);
+        }
+    }
+
+    if (right != nullptr)
+        right->collectLowestLevels(out, maxLevels);
+}
+
+void OrderTree::collectHighestLevels(std::vector<std::pair<int,int>>& out, int maxLevels) {
+    if ((int) out.size() >= maxLevels) return;
+
+    if (right != nullptr)
+        right->collectHighestLevels(out, maxLevels);
+
+    if ((int) out.size() >= maxLevels) return;
+
+    if (ordList !=nullptr) {
+        int quantity = ordList->CalcOrders();
+
+        if (quantity > 0) {
+            out.emplace_back(ordList->price, quantity);
+        }
+    }
+
+    if (left != nullptr)
+        left->collectHighestLevels(out, maxLevels);
+}
+
 
 int OrderTree::getHeight(OrderTree* node) {
     if (node == nullptr)

@@ -1,3 +1,9 @@
+STATUS UPDATE 2026-10-24 23:50 [A]: trading endpoints are on main (COLLAB 9
+  "Trading [A]"), plus portfolio positions carry race_id, candidate, position.
+  trading.open_race/open_market exist; place_order also auto-creates the book.
+  No C++ build needed to run locally: engine.py falls back to a Python book if
+  the exe is missing.
+
 ================================================================================
 AGENT C: CONTENT (SCRAPING), GEMINI AI & FRONTEND
 ================================================================================

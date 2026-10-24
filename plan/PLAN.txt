@@ -1,3 +1,6 @@
+STATUS 2026-10-24 23:50: stream A (engine & trading) MVP done and on main.
+  B and C: see the STATUS UPDATE at the top of your AGENT file.
+
 NOTE (2026-10-24): HIGH-LEVEL ORIGINAL PLAN, PARTLY SUPERSEDED.
 Scope is now Oxford Union elections only (who wins each position). Cuppers and general news are dropped.
 The authoritative specs are COLLAB.txt plus AGENT_A/B/C_*.txt in this folder.

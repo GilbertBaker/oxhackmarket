@@ -29,6 +29,7 @@ void OrderBook::placeBuyOrder(Order* order) {
 
         int p = matchedOrd->price;
         int fillQuantity = std::min(q, matchedOrd->quantity);
+        fills.push_back({matchedOrd->orderID, matchedOrd->id, order->id, p, fillQuantity, true});
 
         Trader* seller = algo->getTrader(matchedOrd->id);
 
@@ -85,6 +86,7 @@ void OrderBook::placeSellOrder(Order* order) {
 
         int p = matchedOrd->price;
         int fillQuantity = std::min(q, matchedOrd->quantity);
+        fills.push_back({matchedOrd->orderID, matchedOrd->id, order->id, p, fillQuantity, false});
 
         Trader* buyer = algo->getTrader(matchedOrd->id);
 
@@ -140,6 +142,7 @@ void OrderBook::placeBuyInstantOrder(int quantity, int traderID) {
         Trader* buyer = algo->getTrader(traderID);
 
         int fillQuantity = std::min(q, matchedOrd->quantity);
+        fills.push_back({matchedOrd->orderID, matchedOrd->id, traderID, p, fillQuantity, true});
 
         // Transfer money
         buyer->money -= fillQuantity * p;
@@ -177,6 +180,7 @@ void OrderBook::placeSellInstantOrder(int quantity, int traderID) {
         Trader* seller = algo->getTrader(traderID);
 
         int fillQuantity = std::min(q, matchedOrd->quantity);
+        fills.push_back({matchedOrd->orderID, matchedOrd->id, traderID, p, fillQuantity, false});
 
         // Transfer money
         buyer->money -= fillQuantity * p;
@@ -317,6 +321,25 @@ void OrderBook::cancelOrder(int orderID) {
 
 
     if (!deleteOrder(orderID)) {
-        std::cout << "\nInvalid cancel ID error\n";
+        std::cerr << "\nInvalid cancel ID error\n";
     }
+}
+
+std::vector<std::pair<int,int>> OrderBook::getDepth(bool bids, int maxLevels) {
+    std::vector<std::pair<int,int>> out;
+    if (bids) {
+        buyOrders->collectHighestLevels(out, maxLevels);
+    }
+    else {
+        sellOrders->collectLowestLevels(out, maxLevels);
+    }
+    return out;
+}
+
+int OrderBook::getRestingQty(int orderID) const {
+    auto it = orders.find(orderID);
+    if (it == orders.end() || it->second == nullptr || it->second->order == nullptr) {
+        return 0;
+    }
+    return it->second->order->quantity;
 }
