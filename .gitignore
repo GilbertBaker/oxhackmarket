@@ -1,6 +1,8 @@
 .env
 build/
 __pycache__/
+server/logs/
 logs/
 *.exe
+.venv/
 .pytest_cache/

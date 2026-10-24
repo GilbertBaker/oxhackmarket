@@ -628,3 +628,17 @@ Timescale features.
              It never starts its own engine, which would split the order books.
              Untracked book/OrderBook/build/ and __pycache__/ (they had been
              committed) and added the root .gitignore exactly as in 2.1.
+  2026-10-24 [B] DATABASE_URL host is v225ef4gzi.k9zhkdj7kx.tsdb.cloud.timescale.com:35489
+             (the service the owner actually uses), not yuaqhx7mx1. .env.example updated.
+  2026-10-24 [B] db.price_at / timemachine use the current_price rule as of t (tick mid,
+             else last trade, else ai_prior) so "now" in the Time Machine matches live prices.
+             current_price rule 1 reads "the latest tick, if it has both sides".
+  2026-10-24 [B] Added GET /api/stats (no auth) -> {"hypertables":[{"name","chunks","compression"}],
+             "compression":{"chunks_compressed","chunks_total","before_bytes","after_bytes","ratio"},
+             "continuous_aggregates":[{"name","realtime"}],
+             "jobs":[{"id","proc","table","every_s","last_status","last_success","next_start"}],
+             "rows":{"trades","price_ticks","portfolio_snapshots"}} for an "Under the hood" panel (C).
+  2026-10-24 [B] Extra db.py helpers others may use: record_tick(..., time=None),
+             insert_portfolio_snapshot, user_orders(user_id, status), user_positions rows include
+             question/candidate/race_id/status/outcome/price. data_api exports race_json /
+             market_json / user_json serializers for COLLAB 9 shapes (C's admin endpoints).
