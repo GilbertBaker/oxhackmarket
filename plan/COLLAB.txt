@@ -604,3 +604,27 @@ Timescale features.
              - trading_api.race_json(race) builds the Race JSON for A's admin
                responses (uses db.race_markets(...)["price"] if present, else
                db.current_price). B may reuse it or A can switch to B's helper.
+  2026-10-25 [A] Helpers so B and C never hand-wire DB + engine (all in trading.py):
+             - create_race(election, position, closes_at, resolution_criteria,
+                 candidates=[{"name","prior"}]|[names], seats=1, status='open'|'proposed',
+                 add_ron=True, **extra_race_columns) -> race_id
+                 Creates race + one market per candidate (+RON, prior 5), builds
+                 the question text, opens books if 'open'. TradingError if the
+                 (election, position) already exists.
+             - add_candidate(race_id, name, prior=None) -> market_id (opened if race open)
+             - approve_race(race_id)  proposed -> open (+ books);  reject_race(race_id)
+             - market_snapshot(mid) -> {"market_id","best_bid","best_ask","last_price"}
+               snapshot_open_markets() -> [snapshot]; record_ticks() -> int writes
+               one price_tick per open market (B: your 15 s job can be just this).
+             - check_invariants() -> [problem strings], [] = healthy.
+             C: POST /api/admin/races, /approve, /reject, /candidates can be thin
+             wrappers over these. B: seed.py can call create_race.
+             New admin endpoints [A]: GET /api/admin/invariants -> {"ok","problems"},
+             POST /api/admin/mm/requote -> {"requoted":int}.
+             New file [A]: server/marketctl.py, an HTTP CLI against the RUNNING app
+             (races, book, order, cancel, portfolio, create-race, approve, close,
+             resolve, check, requote, sim). `sim` runs fake traders through
+             /api/orders to build real trade history for the Time Machine demo.
+             It never starts its own engine, which would split the order books.
+             Untracked book/OrderBook/build/ and __pycache__/ (they had been
+             committed) and added the root .gitignore exactly as in 2.1.
