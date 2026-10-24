@@ -1,6 +1,0 @@
-C:/projects/OxHack/oxhackmarket/book/OrderBook/build/CMakeFiles/OrderBook.dir
-C:/projects/OxHack/oxhackmarket/book/OrderBook/build/CMakeFiles/OrderBookTests.dir
-C:/projects/OxHack/oxhackmarket/book/OrderBook/build/CMakeFiles/OrderBookBenchmark.dir
-C:/projects/OxHack/oxhackmarket/book/OrderBook/build/CMakeFiles/MarketServer.dir
-C:/projects/OxHack/oxhackmarket/book/OrderBook/build/CMakeFiles/edit_cache.dir
-C:/projects/OxHack/oxhackmarket/book/OrderBook/build/CMakeFiles/rebuild_cache.dir
