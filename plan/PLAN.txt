@@ -1,0 +1,170 @@
+NOTE (2026-10-24): HIGH-LEVEL ORIGINAL PLAN, PARTLY SUPERSEDED.
+Scope is now Oxford Union elections only (who wins each position). Cuppers and general news are dropped.
+The authoritative specs are COLLAB.txt plus AGENT_A/B/C_*.txt in this folder.
+
+# OxMarket — prediction market for Oxford University news (OxHack, theme: TIME)
+
+## Context
+Hackathon build. You want a play-money prediction market whose markets are generated from Oxford student news (Cherwell, The Isis, OxStu/Oxford Student, Cuppers sport coverage), running on your existing C++ limit order book (`book/OrderBook`). Stack: simple backend (Flask), plain HTML/CSS/JS frontend. Main prize targets: **MLH Best Use of Tiger Data** (TimescaleDB as the time-series core, which also fits the TIME theme) and **Best Use of Gemini API** (scraping articles into markets, writing summaries of how markets have moved). Secondary: HRT "Data for Predictions", Dev Writing Challenge (via the dev log).
+
+Decisions you've confirmed: new schema `oxmarket` in Timescale; a house market-maker bot for liquidity; one YES book per market where "Buy NO @ x" = "Sell YES @ (100−x)".
+
+---
+
+## 1. Architecture
+
+```
+Browser (HTML/CSS/JS, polls every 2s)
+      │ JSON REST
+Flask app (server/)
+  ├─ engine.py ── stdin/stdout ──► MarketServer.exe (your C++ book, one OrderBook per market)
+  ├─ risk.py      (cash/collateral checks before anything hits the engine)
+  ├─ db.py ─────────────────────► TimescaleDB, schema `oxmarket`
+  ├─ scraper.py   (RSS/HTML → articles)
+  ├─ ai.py        (Gemini: generate markets, write market briefs, suggest resolutions)
+  └─ jobs.py      (background threads: scrape, tick snapshots, MM bot, auto-close)
+```
+
+- **The C++ engine only does matching.** Python is the source of truth for balances (in Postgres). It checks risk *before* sending an order and applies each fill the engine reports.
+- **Bridge = subprocess over stdin/stdout**: no pybind11, no extra C++ dependencies, works with CLion's bundled MinGW. A single `threading.Lock` around the engine keeps every trade in strict order.
+- **Restarts:** on boot, Flask replays all `open` orders from Postgres into a fresh engine process.
+
+## 2. C++ order book changes (only what's needed)
+
+| Change | Why it's necessary |
+|---|---|
+| `TraderAlgo(OrderBook*, int noOfTraders = 100)` | Server mode needs 0 random bots. The default keeps `main.cpp` and the tests unchanged. |
+| `TraderAlgo::getTrader` creates a `Trader` on first use of an unknown ID | Today `traders[id]` returns `nullptr` for new IDs, which crashes as soon as a web user trades. |
+| `struct Fill {makerOrderID, makerTraderID, takerTraderID, price, qty, takerIsBuy}` plus `std::vector<Fill> fills` in `OrderBook`, appended inside the 4 matching loops in `OrderBook.cpp` | Python can't see trades otherwise. Needed for balances, the trade log and price history. |
+| `OrderTree::collectLevels(bool highest, int n, vector<pair<int,int>>&)` (same traversal as `printLowestLevels/printHighestLevels`) plus `OrderBook::getDepth(n)` | The website needs depth data. Today there's only console printing. |
+| New `MarketServer.cpp` plus a CMake target | Line protocol: holds `unordered_map<int, {OrderBook, TraderAlgo}>`, one per market. |
+| `OrderBookTests.cpp`: add tests for fills, on-demand traders and depth | Keeps your test harness meaningful. |
+
+Matching logic, AVL tree, FIFO lists and accounting code stay untouched. The engine's own Trader money/qOwned still update but Python ignores them.
+
+**Protocol** (one command per line, response ends with `END`):
+```
+NEW <mkt>
+LIMIT <mkt> <trader> <B|S> <price 1-99> <qty>  -> OK <orderID> / FILL <makerOrd> <makerTrader> <takerTrader> <px> <qty> <B|S> ... / RESTING <qty>
+MARKET <mkt> <trader> <B|S> <qty>              -> OK / FILL ... lines
+CANCEL <mkt> <orderID>                         -> OK | ERR
+BOOK <mkt> <depth>                             -> BID <px> <qty> ... / ASK <px> <qty> ...
+```
+Build with CLion's bundled toolchain (no cmake/g++ on PATH): `C:\Program Files\JetBrains\CLion 2026.2.0.1\bin\cmake\win\x64\bin\cmake.exe` + `bin\mingw\bin`.
+
+## 3. Prediction-market rules (play money)
+- New accounts get **£1,000 = 100,000p** of fake money. Prices are 1–99p and a YES share pays 100p if the outcome is YES, otherwise 0.
+- Positions are signed (negative means short YES, i.e. long NO).
+- **Risk check** (`risk.py`): `available = cash − 100·Σ short shares − Σ open buy reservations (p·q) − Σ open short-sell collateral ((100−p)·q beyond long holdings)`. Orders that exceed `available` are rejected.
+- Market orders: preview `BOOK` depth for the worst-case cost and cap the quantity. Any unfilled remainder is dropped (IOC).
+- Resolution: cash += position × (100 if YES else 0). All open orders are cancelled and the market is marked `resolved`. An admin confirms (with a Gemini suggestion, §6).
+
+## 4. TimescaleDB (Tiger Data prize centrepiece), schema `oxmarket`
+Safety: step 0 is read-only (list schemas/extensions, confirm `oxmarket` doesn't exist and `timescaledb` is installed). Every DDL statement is schema-qualified `oxmarket.*`. Nothing is ever ALTERed or DROPped outside it. No `CREATE EXTENSION` if it already exists. The password goes only in `.env` (gitignored).
+
+Tables (`server/schema.sql`, idempotent `IF NOT EXISTS`):
+- `users(id, username, pw_hash, cash, is_admin, is_bot, created_at)`
+- `markets(id, question, resolution_criteria, category, source_name, source_url, article_id, closes_at, status[proposed|open|closed|resolved|rejected], outcome, ai_prior, created_at)`
+- `articles(id, source, url UNIQUE, title, summary, published_at, scraped_at)`
+- `orders(engine_order_id, market_id, user_id, side, price, qty, qty_remaining, status, created_at)`
+- `positions(user_id, market_id, qty)`
+- `ai_briefs(market_id, created_at, kind[brief|resolution], text)`
+- **Hypertables:** `trades(time, market_id, price, qty, buyer_id, seller_id, taker_side)`, `price_ticks(time, market_id, bid, ask, mid, last)` (snapshot every 15s plus after each trade), `portfolio_snapshots(time, user_id, equity)` (every 5 min).
+- **Continuous aggregates:** `candles_5m` and `candles_1h` built with `time_bucket` + `first/last/max/min/sum(qty)` on trades, with refresh policies.
+- **Compression policy** on `price_ticks` older than 1 day, plus a retention example.
+- **Queries:** `time_bucket_gapfill` + `locf` for smooth charts. "As-of" queries for the Time Machine. `last()` for current prices. Leaderboard history from `portfolio_snapshots`.
+
+## 5. TIME-themed features
+- **Time Machine page:** a slider across the market's lifetime shows every market's probability at time T (gapfill/locf), plus the headlines published up to T.
+- **Countdown** on every market (`closes_at`). Markets auto-close at the deadline. Markets are framed as "by <date>" questions.
+- **Probability-over-time chart** (Chart.js via CDN) with 5m/1h candle toggles from the continuous aggregates.
+- **"Hindsight" leaderboard:** each user's equity over time, and who called it earliest.
+
+## 6. Gemini (`ai.py`, `google-genai` SDK, model set by `GEMINI_MODEL` env var; verify the current flash model name when building)
+1. **Market generation:** new articles go to Gemini with a JSON schema response of `{question, resolution_criteria, closes_at, category, prior_probability, reason}`, or `null` if the article isn't marketable. Results land as `status=proposed` in an **admin approval queue** (avoids junk or defamatory markets; prompt forbids markets about named private students). The prior seeds the MM bot's fair value.
+2. **Market brief, "why did this move?":** input is the last 24h of `time_bucket` series plus related articles. Output is a short summary, cached in `ai_briefs` and refreshed at most every 30 min or on large moves.
+3. **Resolution assistant:** for closed markets, newer articles go to a suggested outcome plus evidence link. The admin clicks to confirm.
+4. Optional: a daily "Oxford in odds" digest on the homepage.
+
+## 7. Scraper (`scraper.py`)
+- RSS first (WordPress `/feed/`): Cherwell (cherwell.org, plus the sport category for Cuppers), The Isis (isismagazine.org.uk), Oxford Student/OxStu (oxfordstudent.com). Exact feed URLs get checked in step 0. Fallback is `requests` + BeautifulSoup on the section pages.
+- Polls every 30 min with a polite User-Agent. Stores headline, summary and link only, no full article reproduction. Dedupes on URL.
+- `POST /api/admin/scrape` triggers it manually for the demo.
+
+## 8. House market-maker bot (`jobs.py`)
+- `house` bot user with large cash. Every 10s, for each open market: cancel its old quotes, then quote bid `fair−2` / ask `fair+2`, size 50, clamped to 1–99.
+- `fair` = Gemini prior at first, then an EMA of recent trade prices. Inventory skew shifts quotes against its position.
+- Goes through the same risk check → engine path as users.
+
+## 9. Flask API (`app.py`)
+`/api/register, /login, /logout, /me` (session cookie, werkzeug password hashing) · `GET /api/markets` · `GET /api/markets/<id>` (book, recent trades, brief) · `GET /api/markets/<id>/history?bucket=5m` · `POST /api/orders` `{market_id, outcome: YES|NO, side: buy|sell, type: limit|market, price, qty}` (NO is mapped to YES) · `DELETE /api/orders/<id>` · `GET /api/portfolio` · `GET /api/leaderboard` · `GET /api/timemachine?t=` · admin: `/api/admin/proposed`, `approve`, `reject`, `resolve`, `scrape`. Static files are served from `web/`.
+
+## 10. Frontend (`web/`, plain HTML/CSS/JS)
+`index.html` (market cards: probability, sparkline, countdown, source tag) · `market.html` (chart, order ticket Buy YES/Buy NO, depth ladder, trades tape, Gemini brief, source article link) · `timemachine.html` · `leaderboard.html` · `portfolio.html` · `admin.html` · `login.html`. One `style.css`, a small `api.js` fetch helper, and per-page JS. The ticket shows prices as "62p = 62% chance".
+
+## 11. Layout
+```
+book/OrderBook/            existing + MarketServer.cpp, CMake target, small engine edits
+server/  app.py engine.py risk.py db.py schema.sql scraper.py ai.py jobs.py requirements.txt .env.example
+web/     *.html  css/style.css  js/*.js
+DEVLOG.md   README.md   .gitignore (.env, build dirs)
+```
+
+## 12. Logging ("log what you do")
+- `DEVLOG.md`: timestamped entries per phase: what was built, decisions, problems hit, Timescale/Gemini usage. This doubles as material for the Dev Writing Challenge and the Devpost write-up.
+- App logging: Python `logging` to console and `server/logs/app.log` (engine commands, fills, scraper runs, Gemini calls).
+
+## 13. Build order (each phase ends demoable)
+0. Setup: `.gitignore`, `.env.example`, DEVLOG. Read-only DB inspection. Verify the 3–4 feed URLs.
+1. Engine changes, MarketServer, extended tests. Build and run tests with the CLion toolchain.
+2. `schema.sql` applied to `oxmarket` (hypertables, caggs, policies).
+3. Flask core: auth, engine bridge, risk, orders, positions, trades, ticks.
+4. Frontend: index, market, login, portfolio.
+5. MM bot and tick/auto-close jobs. Seed 5–6 hand-written markets so the demo is never empty.
+6. Scraper, Gemini market generation, admin queue.
+7. Timescale showcase: candles, Time Machine, hindsight leaderboard.
+8. Gemini briefs and resolution assistant.
+9. Polish, README, demo script, Devpost/dev-writing post.
+
+## 14. Verification
+- `OrderBookTests` passes, including the new fill/depth/on-demand-trader tests.
+- Pipe a scripted command file into `MarketServer.exe` and diff against the expected FILL/BOOK output.
+- `server/smoke_test.py`: register 2 users, cross orders (YES vs NO), check fills, balances, and conservation of cash + payout liability. Resolve a market and check payouts. Restart Flask and check open orders are rebuilt.
+- In the DB: `timescaledb_information.hypertables` / `continuous_aggregates` list only `oxmarket` objects, and no objects outside `oxmarket` have changed.
+- Manual browser run: place trades, watch the chart and book update, move the Time Machine slider, approve a Gemini-proposed market from a real Cherwell article, read a brief.
+
+## 15. Splitting the work: 3 people (or 3 agents)
+
+### Hour 0: agree the contracts together (~45 min), then split
+Commit these first so everyone can build in parallel against fixed interfaces:
+1. `server/schema.sql`: all `oxmarket` tables (from §4).
+2. `docs/API.md`: every endpoint from §9 with example request/response JSON.
+3. `docs/ENGINE_PROTOCOL.md`: the stdin/stdout protocol from §2.
+4. Repo skeleton: `server/app.py` with Flask blueprints (`trading`, `data`, `content`), `web/` page stubs, `.env.example`, `.gitignore`, `DEVLOG.md`.
+
+### Streams (each person owns their files, which avoids merge conflicts)
+
+| | **A: Engine & Trading** | **B: Timescale & TIME features** (Tiger prize) | **C: Content, AI & Frontend** (Gemini prize) |
+|---|---|---|---|
+| Owns | `book/OrderBook/*`, `server/engine.py`, `risk.py`, `trading.py` (blueprint), `mm_bot.py` | `server/db.py`, `schema.sql`, `data.py` (blueprint), `jobs.py` (ticks, snapshots, auto-close) | `server/scraper.py`, `ai.py`, `content.py` (blueprint), `web/*` |
+| Builds | C++ edits + MarketServer + tests; Python bridge with lock + replay on restart; risk checks; orders/cancel/resolve/portfolio endpoints; house MM bot | Hypertables, continuous aggregates, compression/retention; tick + portfolio snapshot jobs; `/history`, `/timemachine`, `/leaderboard` endpoints; seed markets script | RSS scrapers; Gemini market generation, briefs, resolution assistant; admin queue endpoints; all HTML/CSS/JS pages, charts, Time Machine slider UI |
+| Can start without others by | Using an in-memory fake DB layer until B's `db.py` lands | Inserting synthetic trades/ticks to develop the caggs and queries | Building pages against mock JSON from `docs/API.md`; `ai.py` behind a `FAKE_AI=1` stub until the **Gemini key arrives** (scraper doesn't need it) |
+| Hands to others | `engine.place_order()` → fills list, which B's `db.record_trade()` stores | `db.*` functions used by A and C | Frontend that calls everyone's endpoints |
+
+### Integration milestones
+- **M1 (end-to-end trading):** register → buy YES/NO → fill shows in DB, book and chart. Needs A + B + C's market page.
+- **M2 (news to market):** scrape a real Cherwell article → Gemini proposal (or stub) → admin approves → MM bot quotes it.
+- **M3 (TIME demo):** Time Machine slider, candles, hindsight leaderboard, Gemini brief on a moved market.
+- **M4:** polish, README, Devpost and dev-writing post (built from DEVLOG).
+
+### Working rules
+- Each stream works on its own git branch (`engine`, `data`, `content`) and merges to `main` at each milestone.
+- Everyone appends to `DEVLOG.md` under a `[A]/[B]/[C]` tag with a timestamp.
+- Interface changes go through the `docs/` contracts first, and the other streams get told.
+
+### If run as agents instead
+The same 3 streams map onto 3 Claude agents, each in its own git worktree (`isolation: worktree`), each briefed with this plan plus its row of the table. One coordinator (me) does Hour 0, merges at milestones and runs the §14 verification. Stream C's Gemini work stays on the stub until you provide the key.
+
+## Needed from you before building
+- Timescale password (into `.env` as `DATABASE_URL`). `GEMINI_API_KEY` later: everything runs on the stub until then.
+- **First action once out of plan mode:** copy this plan to `C:\projects\OxHack\oxhackmarket\PLAN.txt`. Plan mode only lets me write the plan file, so I couldn't save it there yet.

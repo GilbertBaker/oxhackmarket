@@ -1,0 +1,235 @@
+================================================================================
+AGENT B: DATA (TIMESCALEDB) & TIME FEATURES
+================================================================================
+READ FIRST: plan/COLLAB.txt (the shared contract: schema, API, units, ownership,
+DB safety rules). This file plus COLLAB.txt is everything you need. If the two
+conflict, COLLAB.txt wins. Raise the conflict in its change log.
+
+You are one of three parallel streams (A = Engine & Trading, B = you,
+C = Content/AI/Web). Don't wait for the others. Use the STUB rule (COLLAB 2.2)
+or fakes in your tests. You go first on the skeleton (task B1) because A and C
+plug into app.py, so get B1 committed quickly.
+
+MISSION
+Own the data layer and the app wiring. Make TimescaleDB the centrepiece of the
+project for the MLH "Best Use of Tiger Data" prize: hypertables, continuous
+aggregates, compression/retention policies, gap-filled time-series queries,
+"as-of" queries. Build the TIME-themed APIs (price history, Time Machine,
+hindsight leaderboard) plus auth, seed data and snapshot jobs.
+Current scope is Oxford Union elections only: races (one position in one
+election) each made of per-candidate binary markets (see COLLAB 5 "RACES").
+The headline TIME feature is "who was winning each position at any moment".
+
+YOU OWN (only edit these, plus the shared files in COLLAB 2.1)
+  server/app.py  server/db.py  server/schema.sql  server/data_api.py
+  server/jobs.py  server/seed.py  server/tests/test_db*.py
+  You also CREATE the shared files: README.md section skeleton,
+  server/requirements.txt, .env.example, .gitignore, DEVLOG.md.
+
+YOU DEPEND ON
+  A: trading.startup(), start_background(), get_book(), close_race(),
+     open_race(), available_cash() (COLLAB 7.1). Stub these if A hasn't delivered yet.
+  C: content_api.bp, content.start_background(). Stub if missing.
+  Everyone depends on your db.py, so publish it early, even partially.
+
+--------------------------------------------------------------------------------
+DATABASE SAFETY (repeat of COLLAB 4. Breaking this is the worst possible bug)
+--------------------------------------------------------------------------------
+  - The DB already holds the owner's other data. Everything we create lives
+    in schema `oxmarket`. Never ALTER/DROP/TRUNCATE/INSERT outside it.
+  - First connection: READ ONLY inspection. List schemas, tables and
+    extensions. Record in DEVLOG what exists (names only), that `oxmarket`
+    doesn't exist yet, and the timescaledb extension version. If timescaledb
+    is missing, STOP and ask the owner. Never CREATE EXTENSION over an
+    existing one.
+  - Connections set search_path to oxmarket (plus public only if the
+    Timescale functions need it). Still schema-qualify DDL.
+  - You are the only stream that runs DDL.
+
+--------------------------------------------------------------------------------
+TASKS (do in order; each ends with a DEVLOG entry)
+--------------------------------------------------------------------------------
+B1. Skeleton (commit ASAP, this is milestone M0)
+  - .gitignore (.env, build/, __pycache__/, server/logs/, *.exe, .venv/),
+    .env.example (all variables in COLLAB 3, with the password replaced by
+    <PASSWORD>), server/requirements.txt (COLLAB 1), DEVLOG.md with a header
+    and format note, README.md with headings for each stream.
+  - Python venv instructions in README (python -m venv .venv;
+    pip install -r server/requirements.txt).
+  - server/app.py:
+      load .env (python-dotenv); configure logging (console +
+      server/logs/app.log); app = Flask(__name__, static_folder="../web",
+      static_url_path=""); app.secret_key = SECRET_KEY;
+      route "/" -> web/index.html;
+      db.ensure_schema(); db.ensure_bot_user();
+      register blueprints trading_api.bp, data_api.bp, content_api.bp;
+      trading.startup();
+      unless DISABLE_JOBS=1: trading.start_background(),
+        jobs.start_background(), content.start_background();
+      a JSON 404/500 handler for /api/* paths;
+      run on PORT with debug off (the reloader would start the engine twice:
+      use_reloader=False).
+    Each startup call is wrapped in try/except with logging, so a broken
+    stream doesn't stop the others from running during development.
+  - Create STUBs (COLLAB 2.2) for trading.py, trading_api.py, content.py and
+    content_api.py if they don't exist yet, so the app boots.
+  Done when: `python server/app.py` serves web/ and GET /api/me returns 401.
+
+B2. Read-only DB inspection, then schema.sql
+  - Do the inspection described above first.
+  - Write server/schema.sql implementing COLLAB 6 exactly:
+      CREATE SCHEMA IF NOT EXISTS oxmarket;
+      tables and indexes (IF NOT EXISTS); CREATE SEQUENCE oxmarket.orders_id_seq;
+      hypertables via create_hypertable(..., if_not_exists => TRUE) for trades,
+        price_ticks, portfolio_snapshots (chunk interval 1 day);
+      continuous aggregates oxmarket.candles_5m and candles_1h
+        (WITH (timescaledb.continuous), time_bucket, first/last/max/min/sum),
+        plus add_continuous_aggregate_policy (refresh every 1 min / 5 min,
+        if_not_exists);
+      compression: ALTER TABLE oxmarket.price_ticks SET (timescaledb.compress,
+        timescaledb.compress_segmentby = 'market_id') + add_compression_policy
+        (1 day, if_not_exists);
+      retention example: add_retention_policy on price_ticks (90 days,
+        if_not_exists);
+      real-time aggregation on (materialized_only = false) so new trades
+        show immediately.
+    Remember a hypertable's unique constraints must include the time column,
+    so don't put a serial PK on hypertables.
+  - db.ensure_schema() executes schema.sql. It must be safely re-runnable.
+  Done when: applying it twice gives no errors, and
+  timescaledb_information.hypertables / continuous_aggregates / jobs list
+  ONLY oxmarket objects that we created.
+
+B3. server/db.py (all functions in COLLAB 7.2, exact names and signatures)
+  - psycopg 3 + psycopg_pool.ConnectionPool (min 1, max 10), opened at import
+    or lazily from DATABASE_URL, with search_path set via options or on
+    connect. Use dict_row so rows come back as dicts.
+  - transaction(): a context manager yielding a pooled conn inside
+    conn.transaction(). All functions accept conn=None.
+  - Convert timestamps to ISO 8601 UTC 'Z' strings in a helper (iso(dt)), and
+    use it in all API-facing dicts.
+  - current_price / equity follow COLLAB 5 exactly.
+  - price_history: time_bucket_gapfill(bucket, time, since, now()) over
+    trades, with locf(last(price,time)) for close. For 5m/1h you may use the
+    candles caggs (show both in DEVLOG: cagg for speed, gapfill for
+    continuity). Also fall back to price_ticks when a market has no trades
+    yet (so charts aren't empty: use ticks' mid, then ai_prior).
+  - price_at(market_id, t): last trade price <= t, else last tick mid <= t,
+    else ai_prior if the market existed at t, else None.
+  - timemachine(t): one query returning, for every race with created_at <=
+    t: id, election, position, seats, status as of t ('resolved' if
+    resolved_at <= t, 'closed' if closes_at <= t, else 'open'), and every
+    candidate market's price as of t (candidates created after t excluded).
+    Use a LATERAL join with ORDER BY time DESC LIMIT 1, or last(). Then
+    group into the COLLAB 9 timemachine shape in Python.
+  - race_history(race_id, bucket, since): one gap-filled query over all the
+    race's markets (GROUP BY market_id, time_bucket_gapfill, locf). Returns
+    one series per candidate, which powers the multi-line race chart.
+  - update_race(id, status=...) applies status (and closes_at) to all the
+    race's markets in the same transaction.
+  - Race ordering helper: President, Librarian, Treasurer, Secretary, then
+    other positions alphabetically.
+  - leaderboard: equity for every non-bot user, ranked.
+    equity_history: time_bucket over portfolio_snapshots with last(equity).
+  - ensure_bot_user: creates "house" (is_bot, cash 100000000, unusable
+    password hash) if missing. Returns the id.
+  - Write tests (server/tests/test_db*.py) against the real DB with a
+    clearly named test prefix for usernames ("test_") and cleanup of only
+    rows those tests created. Never truncate.
+
+B4. server/data_api.py (Flask blueprint `bp`)
+  - Auth endpoints (COLLAB 9 "Auth [B]"): werkzeug generate_password_hash /
+    check_password_hash; session["user_id"]; is_admin if the username is in
+    ADMIN_USERNAMES; User includes "available" from trading.available_cash
+    (fall back to cash if trading is a stub).
+    Export helpers login_required, admin_required, current_user() (others
+    may import them, but they're allowed their own copies).
+  - Races, markets & data endpoints (COLLAB 9 "Races, markets & data [B]"):
+    races list + detail (Race objects with candidates sorted by price and
+    overround = sum of candidate prices), race history, markets list (with
+    sparkline = 24 hourly prices via time_bucket_gapfill + locf,
+    change_24h, volume_24h), market detail (with its race), trades, market
+    history, timemachine, timemachine/range (start = earliest race
+    created_at, end = now), leaderboard, leaderboard/history.
+    Proposed/rejected races are NOT returned by public endpoints (only via
+    C's admin endpoints).
+  - Validate inputs (bucket in 1m/5m/1h, ISO parse errors -> 400).
+  Done when: every endpoint returns the exact JSON shape in COLLAB 9
+  (check with curl and record sample outputs in DEVLOG).
+
+B5. server/jobs.py (start_background(), COLLAB 10)
+  - Tick snapshot every 15 s: for each open market, trading.get_book(id, 1)
+    -> record_tick(best_bid, best_ask, last_trade_price). Skip writing if
+    nothing changed since the last tick for that market AND the last tick is
+    < 60 s old (keeps the table lean but continuous).
+  - Auto-close every 60 s: races with status 'open' and closes_at <= now
+    -> trading.close_race(id) (polls have closed, so trading stops).
+  - Portfolio snapshot every 5 min (also once at startup) for all non-bot
+    users: cash + equity.
+  - Each job runs in its own daemon thread with try/except + logging.
+
+B6. server/seed.py (run manually: python server/seed.py [--demo] [--history])
+  Scope is Oxford Union elections only (COLLAB "CURRENT SCOPE").
+  - Default (no flags): ensures the house user exists and creates nothing
+    else. Real races come from C's scraper/Gemini or the admin form.
+  - --demo: idempotent (skip if election+position exists). Creates a DEMO
+    election "DEMO Michaelmas 2026" with OPEN races: President (seats 1),
+    Librarian (1), Treasurer (1), Secretary (1), Standing Committee
+    (seats 5). Each race has 2-4 clearly FICTIONAL candidates (e.g.
+    "Candidate A. Example") plus "RON (Re-Open Nominations)", priors that
+    sum to ~100*seats, and closes_at = Friday of 7th week of Michaelmas 2026
+    at 18:00 UK time (approx. 2026-11-27. Note it as approximate). Every
+    demo race description starts with "DEMO DATA, fictional candidates".
+    A --purge-demo flag deletes ONLY races whose election starts with
+    "DEMO " (and their markets/orders/trades/ticks), never anything else.
+  - --history: generates a SYNTHETIC past (e.g. 3 days of trades and ticks
+    as random walks, renormalised so each race sums to ~100*seats) for the
+    demo races, so the Time Machine shows the race swinging over time.
+    Insert ONLY via db.py functions with explicit timestamps, with the house
+    user as both sides. Note it clearly in README as demo data.
+  - Call trading.open_race for created races if the engine is running (or
+    let trading.startup handle it on next boot).
+
+B7. Timescale showcase & write-up (this is what wins the Tiger Data prize)
+  - README section "TimescaleDB usage": list every feature used and where
+    (hypertables, chunking, continuous aggregates + policies, real-time
+    aggregation, compression + segmentby, retention, time_bucket,
+    time_bucket_gapfill + locf, first()/last(), as-of LATERAL queries), each
+    with the query snippet from db.py and why it matters for TIME.
+  - Optional stretch: an /api/stats endpoint (chunk count, compression ratio
+    from hypertable_compression_stats, cagg freshness) that C can show on
+    an "Under the hood" panel. If you add it, document it in COLLAB 9 and
+    the change log first.
+  - Measure one or two queries (EXPLAIN ANALYZE cagg vs raw) and note them
+    in DEVLOG.
+
+--------------------------------------------------------------------------------
+VERIFICATION (must pass before you call your stream done)
+--------------------------------------------------------------------------------
+  [ ] DEVLOG records the read-only inspection, and no non-oxmarket object was
+      changed (compare the before/after object lists outside oxmarket).
+  [ ] schema.sql applies twice cleanly. Hypertables, caggs and policies are
+      visible in timescaledb_information views.
+  [ ] pytest server/tests/test_db*.py passes: user create/get, race + candidate
+      market CRUD (update_race status propagates to markets, UNIQUE
+      election+position enforced), order/position updates in one transaction
+      (rollback works), trades -> candles via cagg, price_history and
+      race_history gapfill have no holes, price_at / timemachine at a past t
+      return the historical prices grouped by race, equity formula with a
+      short position.
+  [ ] All B endpoints return COLLAB 9 shapes. Register/login/logout/me work
+      with a session cookie.
+  [ ] With A's real trading code: ticks appear every 15 s, auto-close closes
+      an expired race (all its candidate markets), portfolio snapshots
+      accumulate.
+  [ ] python server/seed.py --demo --history creates the DEMO election and
+      runs again without duplicates. --purge-demo removes only DEMO races.
+  [ ] DEVLOG entries for B1-B7.
+
+RULES REMINDER
+  - DB safety rules above are absolute.
+  - Don't put trading logic (cash/position maths on fills, settlement) in
+    db.py. db.py offers primitives. A composes them. You compute only read
+    formulas (current_price, equity).
+  - Don't edit A's or C's files except as marked STUBs (replace nothing they
+    have written).

@@ -1,0 +1,292 @@
+================================================================================
+AGENT A: ENGINE & TRADING
+================================================================================
+READ FIRST: plan/COLLAB.txt (the shared contract: schema, API, engine protocol,
+units, ownership, DB safety rules). This file plus COLLAB.txt is everything you
+need. If the two conflict, COLLAB.txt wins. Raise the conflict in its change log.
+
+You are one of three parallel streams (A = you, B = Data & TIME,
+C = Content/AI/Web). The others build against the same contract at the same
+time. Don't wait for them. Use the STUB rule (COLLAB 2.2) or fakes in your own
+tests where you need their code.
+
+MISSION
+Turn the project owner's C++ limit order book into the matching engine of a
+prediction market. Make only the C++ changes that are really necessary. Build
+the Python bridge, risk checks, order placement, settlement, trading API and a
+house market-maker bot so the market always has prices.
+Current scope is Oxford Union elections only. Each race (one position in one
+election) is a set of per-candidate binary YES/NO markets, each with its own
+book (COLLAB 5 "RACES"). The engine stays single-outcome. Your race-level
+additions are open/close/resolve_race and normalising the MM bot per race.
+
+YOU OWN (only edit these, plus the shared files in COLLAB 2.1)
+  book/OrderBook/**   server/engine.py   server/risk.py   server/trading.py
+  server/trading_api.py   server/mm_bot.py   server/tests/test_trading*.py
+
+YOU DEPEND ON
+  B: db.py functions (COLLAB 7.2), app.py registering your blueprint and
+     calling trading.startup() / trading.start_background().
+  Nobody depends on you for C++. B depends on trading.get_book / close_race /
+  open_race / available_cash. C depends on open_race / open_market. C's frontend depends on your HTTP endpoints.
+
+--------------------------------------------------------------------------------
+BACKGROUND: THE EXISTING ENGINE (read the code before changing anything)
+--------------------------------------------------------------------------------
+  book/OrderBook/
+    Order.h/.cpp                      Order(price, qty, time, traderID, orderID, buyOrder)
+    DataStructures/OrderBook.*        placeBuyOrder/placeSellOrder (limit),
+                                      placeBuyInstantOrder/placeSellInstantOrder (market),
+                                      cancelOrder, deleteOrder, getBestBid/Ask,
+                                      outputOrderBook (console only)
+    DataStructures/OrderTree.*        AVL tree of price levels, has
+                                      printLowestLevels/printHighestLevels
+    DataStructures/OrderList.*, OrdListNode.*   FIFO list per price level
+    Traders/Trader.*, TraderAlgo.*    trader accounts + random-bot simulation
+    OrderBookTests.cpp, OrderBookBenchmark.cpp, main.cpp, CMakeLists.txt
+  Facts that matter:
+  - Trades execute at the resting order's price, with price-time priority.
+  - The engine moves Trader money/qOwned itself. We IGNORE those engine-side
+    balances. Python/Postgres is the source of truth.
+  - TraderAlgo::getTrader(id) does traders[id], which returns nullptr for an
+    unknown id. That crashes in OrderBook as soon as a web user trades.
+  - TraderAlgo's constructor creates 100 random traders. getNextID() is per
+    TraderAlgo, so ids would collide across markets. That's why Python
+    allocates order ids (COLLAB 8).
+  - No way to observe fills or read depth programmatically.
+  The owner wrote this engine to learn. Respect the style (naming, comments,
+  formatting), keep changes minimal, and DO NOT rewrite the matching logic,
+  the AVL tree or the lists.
+
+--------------------------------------------------------------------------------
+TASKS (do in order; each ends with a DEVLOG entry)
+--------------------------------------------------------------------------------
+A1. Build the existing project
+  - Configure and build with the CLion toolchain (paths in COLLAB 1) into
+    book/OrderBook/build, using the MinGW Makefiles generator. Put mingw\bin
+    on PATH for the build.
+  - If cmake_minimum_required(VERSION 4.3) is newer than the bundled cmake,
+    lower it to what's available (allowed change).
+  - Run the existing OrderBookTests and confirm they pass BEFORE any change.
+  Done when: OrderBookTests passes, and the exact build commands are recorded
+  in DEVLOG and in a "Building the engine" section of README.md.
+
+A2. Minimal engine changes
+  a) TraderAlgo(OrderBook* ordBook, int noOfTraders = 100). The default keeps
+     main.cpp, the tests and the benchmark behaving the same.
+  b) TraderAlgo::getTrader(id): if the id is missing, create a Trader(id),
+     set algo = this, insert it and return it.
+  c) Fill reporting: add to OrderBook.h
+        struct Fill { int makerOrderID; int makerTraderID; int takerTraderID;
+                      int price; int qty; bool takerIsBuy; };
+        std::vector<Fill> fills;   // appended by the matching loops, drained by the caller
+     Append one Fill inside each of the 4 matching loops in OrderBook.cpp
+     (placeBuyOrder, placeSellOrder, placeBuyInstantOrder,
+     placeSellInstantOrder) right after fillQuantity is computed and before
+     the maker order can be deleted.
+  d) Depth: add OrderTree::collectLowestLevels / collectHighestLevels(
+     std::vector<std::pair<int,int>>& out, int maxLevels), mirroring the
+     traversal of printLowestLevels/printHighestLevels. qty = sum of
+     quantities in that level's OrderList. Expose it as
+     OrderBook::getDepth(bool bids, int maxLevels) -> vector<pair<int,int>>.
+  e) Order ids: the engine must accept the caller's orderID (Order already
+     takes orderid in its constructor, so no change is expected).
+  f) Extend OrderBookTests.cpp with tests for: fills recorded with correct
+     maker/taker/price/qty across multiple levels; trading by a trader id
+     that wasn't pre-created; getDepth ordering and summed quantities;
+     cancel removes a level from the depth.
+  Done when: old and new tests pass, the benchmark still compiles, and the
+  diff stays small and readable.
+
+A3. MarketServer executable
+  - New file book/OrderBook/MarketServer.cpp plus a CMake target
+    "MarketServer" (same source list as OrderBook, without main.cpp).
+  - Holds std::unordered_map<int, Market> where Market = {OrderBook book;
+    TraderAlgo algo{&book, 0};} with book.algo = &algo. Watch pointer
+    stability: allocate each Market with new/unique_ptr so addresses don't
+    move when the map rehashes.
+  - Implements EXACTLY the protocol in COLLAB 8. Print "READY" at start,
+    flush stdout after every "END" (std::endl or explicit flush). Unknown
+    market -> ERR unknown_market. Bad input -> ERR bad_command. Price outside
+    1..99 or qty <= 0 -> ERR bad_args. Never crash on bad input.
+  - LIMIT: clear book.fills, build Order(price, qty, 0, traderId, orderId,
+    side==B) (time is unused, so pass 0), call placeBuyOrder/placeSellOrder,
+    print FILL lines from book.fills, then RESTING <q>. To work out the
+    resting qty, check whether the order id is still in the book and read
+    its quantity (add a small const accessor OrderBook::getRestingQty(int
+    orderID) returning 0 if absent; it's necessary because the engine deletes
+    fully-filled incoming orders).
+  - MARKET: same, using placeBuyInstantOrder/placeSellInstantOrder.
+    UNFILLED = qty - sum of fills.
+  - CANCEL: use cancelOrder. Report ERR not_found when the id isn't resting
+    (check via getRestingQty first).
+  - BOOK: getDepth both sides.
+  - Remove or guard the std::cout prints inside OrderBook (e.g. the
+    "Invalid cancel ID error" line) so they never pollute the protocol stream.
+    Route them to std::cerr instead.
+  - Add a scripted protocol test: book/OrderBook/tests/protocol_input.txt plus
+    expected_output.txt, and document how to diff them.
+  Done when: piping the input file through MarketServer.exe gives the
+  expected output exactly.
+
+A4. server/engine.py (Python bridge)
+  - class Engine: starts ENGINE_PATH with subprocess.Popen (text mode,
+    line-buffered), waits for READY. A threading.Lock serialises all calls.
+    send(cmd) -> list of response lines up to END. Raises EngineError on ERR.
+  - Typed helpers: new_market(mkt), limit(mkt, order_id, trader, side, price,
+    qty) -> (fills, resting), market(mkt, trader, side, qty) -> (fills,
+    unfilled), cancel(mkt, order_id) -> bool, book(mkt, depth) -> dict.
+  - If the process dies (EOF/BrokenPipe): log it, restart it, call the
+    replay hook supplied by trading.py, then retry the command once.
+  - Log every command and response at DEBUG level.
+  - Module-level singleton get_engine().
+  Done when: a pytest test (skipped if the exe is missing) runs NEW, LIMIT
+  crossing, BOOK and CANCEL through the bridge.
+
+A5. server/risk.py
+  Pure functions with no DB access, so they're easy to unit test. Inputs are
+  plain dicts/lists from db:
+  - locked_cash(positions, open_orders) =
+        SUM over markets 100 * max(0, -position_qty)
+      + SUM open buy orders  price * qty_remaining
+      + SUM open sell orders (100 - price) * uncovered_qty
+    where, per market, uncovered_qty for sell orders = the part of the total
+    open sell quantity NOT covered by max(0, position_qty).
+  - available(cash, positions, open_orders) = cash - locked_cash(...)
+  - check_order(cash, positions, open_orders, market_id, side, price, qty)
+    -> None or raises RiskError("Insufficient funds: need X, available Y")
+    by computing available before and after adding the hypothetical order.
+  - worst_case_market_cost(book_side_levels, qty) -> (cost, fillable_qty)
+    for market orders. Buying walks the asks (cost = sum price*qty). Selling
+    walks the bids (cost = collateral (100-price) per uncovered share).
+  Unit tests: long covering a sell needs no collateral; a naked short needs
+  (100-p); a buy needs p*q; a mixed case.
+
+A6. server/trading.py (service layer, signatures fixed in COLLAB 7.1)
+  - place_order:
+      1. Validate: market exists and status=='open'; outcome/side/type valid;
+         1<=price<=99 for limit orders; 1<=qty<=100000.
+      2. Map to YES terms (COLLAB 5): NO buy p -> YES sell (100-p), NO sell
+         p -> YES buy (100-p).
+      3. Under the engine lock (hold it for steps 3-6 so trades are strictly
+         ordered): load cash, positions and open orders and run the risk check.
+         Market orders: read book depth, use worst_case_market_cost, and cap
+         qty at what's affordable and fillable. If 0, raise TradingError
+         "No liquidity" or "Insufficient funds".
+      4. Limit: order_id = db.next_order_id(); engine.limit(...).
+         Market: engine.market(...).
+      5. In ONE db.transaction(): for each fill, buyer/seller = taker or maker
+         by side; adjust_cash buyer -p*q and seller +p*q; add_position buyer
+         +q (cost +p*q) and seller -q (cost -p*q); update_order for the maker
+         (qty_remaining -= q, status 'filled' at 0); insert_trade. Then
+         insert_order for the taker limit order (status 'open' if resting>0
+         else 'filled'; qty_remaining = resting). If any fills happened:
+         record_tick(market, best_bid, best_ask, last fill price) using a
+         fresh engine.book(mkt, 1).
+      6. Return {"order": Order or None, "fills": [...]}.
+    Self-trades are allowed (they net out). The MM bot avoids them by
+    cancelling its own quotes before requoting.
+    If the DB transaction fails after the engine has matched, log at ERROR
+    and restart the engine plus replay from DB, which brings the engine back
+    in line with the DB.
+  - cancel_order: owner (or admin) check, the order must be 'open',
+    engine.cancel, update_order(status='cancelled').
+  - close_market: cancel every open order in the market (engine + DB), then
+    db.update_market(id, status='closed'). Idempotent.
+  - resolve_market: market must be 'open' or 'closed'. close_market first.
+    In one transaction: for each position, if outcome YES adjust_cash
+    (user, 100*qty) (negative qty pays). Then set every position qty to 0
+    (add_position with -qty, cost delta 0) and update_market(status=
+    'resolved', outcome, resolved_at=now). Log the totals paid.
+  - open_race: open_market for every candidate market in db.race_markets.
+  - close_race: close_market for each candidate, then db.update_race(id,
+    status='closed'). Idempotent.
+  - resolve_race(race_id, winner_market_ids): validate that every id belongs
+    to the race, len == seats (or exactly [RON market] if RON wins), and the
+    race is open/closed. close_race first, then resolve_market YES for
+    winners and NO for everyone else. Then db.update_race(status='resolved',
+    resolved_at=now). Do it all in ONE db transaction (pass conn through,
+    so a failure leaves nothing half-paid).
+  - get_book, available_cash, open_market, startup (replay, COLLAB 7.1),
+    start_background (starts mm_bot unless DISABLE_JOBS=1).
+  Done when: tests with a fake db (in-memory dict implementing the db
+  functions you use) and the real engine cover the scenarios in VERIFICATION.
+
+A7. server/trading_api.py (Flask blueprint named `bp`, no url_prefix; routes
+    include /api/...)
+  Endpoints exactly as COLLAB 9 "Trading [A]": book, POST/DELETE/GET orders,
+  portfolio, admin race close/resolve (main path), admin single-market
+  close/resolve (edge cases such as a candidate withdrawing). Portfolio
+  positions also include "race_id", "candidate" and "position" (the race
+  position name) so the UI can group them. Session: user id in
+  flask.session["user_id"] (B's auth sets it). Use a small login_required /
+  admin_required helper inside your own file (or import from data_api if B
+  provides one; keep your own copy so you're independent). TradingError ->
+  400 {"error"}. Responses include a "user" object (COLLAB 9 User shape)
+  where specified, with "available" = available_cash.
+  Portfolio: positions from db.user_positions where qty != 0, price from
+  db.current_price, value = qty*price, label YES if qty>0 else NO,
+  equity = db.equity(user_id).
+
+A8. server/mm_bot.py (house market maker)
+  - Every 10 s (daemon thread, started by trading.start_background), for each
+    race with status 'open', for each of its candidate markets:
+      raw = blend: if there are no trades yet, raw = ai_prior or
+            (100*seats / number of candidates); else raw = EMA(alpha 0.3)
+            of recent trade prices, pulled 10% toward ai_prior. Keep state
+            in memory per market.
+      Normalise across the race: fair_i = raw_i * (100*seats) / sum(raw),
+      then clamp to 2..98. (Probabilities within a race must be
+      consistent. Without this the bot would quote President candidates
+      summing to e.g. 140%.)
+      skew = clamp(-house_position / 50, -3, 3) points
+      bid = clamp(round(fair + skew) - 2, 1, 98), ask = clamp(round(fair +
+      skew) + 2, 2, 99), and ask > bid always.
+      Cancel the house's previous open orders in that market, then place a
+      limit buy (bid, 50) and a limit sell (ask, 50) via trading.place_order
+      as the house user (db.ensure_bot_user()). The bot can short. Its huge
+      cash covers collateral.
+  - Each market is wrapped in try/except, and errors are logged.
+  - Expose requote_all() for tests and for an admin "kick" if useful.
+  Done when: within 15 s of the app starting, every open market shows a
+  2-sided book on /api/markets/<id>/book.
+
+A9. Integration & polish (with B and C at milestones M1-M3)
+  - Check the frontend ticket flows against your endpoints (buy YES, buy NO,
+    sell, cancel, market orders). Fix contract mismatches by updating
+    COLLAB first.
+  - Write the README section "Matching engine & market mechanics": how the
+    owner's C++ book is used, what was changed and why (list the A2 changes),
+    the NO = sell YES mapping, the collateral rule.
+
+--------------------------------------------------------------------------------
+VERIFICATION (must pass before you call your stream done)
+--------------------------------------------------------------------------------
+  [ ] OrderBookTests passes (old + new tests).
+  [ ] Protocol script diff is identical.
+  [ ] pytest server/tests/test_trading*.py passes, covering:
+      - two users: A buys YES 10 @60 resting, B buys NO 10 @40 (= sell YES @60)
+        -> one trade @60 qty10; A pos +10 cash -600; B pos -10 cash +600;
+        sum of positions 0; sum of cash unchanged.
+      - partial fill leaves the correct qty_remaining in DB and engine.
+      - an order above available cash is rejected with 400 and nothing reaches
+        the engine.
+      - market order across 3 levels caps correctly.
+      - cancel releases locked cash.
+      - resolve YES: long gets 100/share, short pays 100/share; positions 0.
+      - resolve_race with 3 candidates + RON, seats 1: the winner's holders
+        get paid, every other market resolves NO, the race and all its
+        markets are 'resolved'. Wrong winner count -> TradingError.
+      - multi-seat race (seats 5): 5 winners accepted, 4 rejected.
+      - MM bot: quotes in a 4-candidate race have mids summing to ~100.
+      - restart: kill the engine process, the next order triggers replay, the
+        book matches the DB open orders.
+  [ ] After a live run, every DB invariant holds: per market SUM(positions.qty)
+      = 0, and no user has negative available cash.
+  [ ] DEVLOG entries for A1-A9.
+
+RULES REMINDER
+  - Never run DDL or touch the DB outside the db.py functions (COLLAB 4).
+  - Don't edit files owned by B or C except as a marked STUB.
+  - Keep the C++ diff minimal and in the owner's style. Explain every C++
+    change in DEVLOG ("why it was necessary").

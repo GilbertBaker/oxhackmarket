@@ -1,0 +1,590 @@
+================================================================================
+OXMARKET: SHARED COLLABORATION CONTRACT (COLLAB.txt)
+================================================================================
+Every person/agent reads this file IN FULL before starting, plus their own
+AGENT_X file. This file is the single source of truth for interfaces that are
+shared between streams. If your work needs a contract change, edit this file
+(section 14 change log) AND tell the other streams. Never silently diverge.
+
+Project: OxMarket, a play-money prediction market on Oxford University news.
+Hackathon: OxHack. Theme: TIME.
+Prize targets: MLH Best Use of Tiger Data (TimescaleDB), MLH Best Use of Gemini
+API, plus HRT "Best of Data for Predictions" and the Dev Writing Challenge.
+
+CURRENT SCOPE: OXFORD UNION ELECTIONS ONLY
+  For now the ONLY markets are "who wins each position" in Oxford Union
+  elections (President, Librarian, Treasurer, Secretary, and the multi-seat
+  committees such as Standing Committee / Secretary's Committee).
+  Sources: Cherwell, Oxford Student (OxStu), The Isis, and the Oxford Union's
+  own site if it publishes candidate lists/results, filtered to Union
+  election coverage. Cuppers/sport and general news are OUT OF SCOPE for now.
+  Keep the code general where it costs nothing (category column etc.) so
+  more market types can come back later. Don't build for them now.
+
+--------------------------------------------------------------------------------
+0. TEAM / STREAMS
+--------------------------------------------------------------------------------
+  A = Engine & Trading     (file: AGENT_A_ENGINE_TRADING.txt)
+      C++ order book changes, engine bridge, risk checks, orders, settlement,
+      house market-maker bot.
+  B = Data & TIME          (file: AGENT_B_DATA_TIME.txt)
+      TimescaleDB schema, db.py data layer, auth, app.py wiring, background
+      snapshot jobs, history / time machine / leaderboard APIs, seed data.
+  C = Content, AI & Web    (file: AGENT_C_CONTENT_AI_FRONTEND.txt)
+      Union-election news scrapers, Gemini integration (candidate
+      extraction, briefs, result detection), admin race-approval APIs, the
+      whole HTML/CSS/JS frontend.
+
+--------------------------------------------------------------------------------
+1. TECH STACK (fixed, do not change)
+--------------------------------------------------------------------------------
+  - C++20 order book (existing code in book/OrderBook/, by the project owner).
+    Built with CLion's bundled toolchain (no cmake/g++ on PATH):
+      cmake: "C:\Program Files\JetBrains\CLion 2026.2.0.1\bin\cmake\win\x64\bin\cmake.exe"
+      mingw: "C:\Program Files\JetBrains\CLion 2026.2.0.1\bin\mingw\bin"
+  - Python 3.12 + Flask backend. Python libraries (server/requirements.txt):
+      flask, psycopg[binary], psycopg_pool, python-dotenv, requests,
+      feedparser, beautifulsoup4, google-genai
+    (werkzeug comes with flask; use werkzeug.security for password hashing)
+  - TimescaleDB (Tiger Data cloud), Postgres protocol.
+  - Frontend: plain HTML + CSS + vanilla JS. Only allowed external lib:
+    Chart.js via CDN. No build step, no frameworks.
+  - OS: Windows 11, shells PowerShell / Git Bash.
+
+--------------------------------------------------------------------------------
+2. REPO LAYOUT AND FILE OWNERSHIP
+--------------------------------------------------------------------------------
+Only edit files you own. Exceptions: the shared files in 2.1 (append-only) and
+the STUB rule in 2.2.
+
+  book/OrderBook/**                      A
+  server/engine.py                       A   (C++ subprocess bridge)
+  server/risk.py                         A
+  server/trading.py                      A   (trading service functions, sec. 7.1)
+  server/trading_api.py                  A   (Flask blueprint `bp`)
+  server/mm_bot.py                       A
+  server/tests/test_trading*.py          A
+
+  server/app.py                          B   (Flask app factory, wiring)
+  server/db.py                           B   (ALL SQL access goes through here)
+  server/schema.sql                      B
+  server/data_api.py                     B   (Flask blueprint `bp`, incl. auth)
+  server/jobs.py                         B   (snapshot + auto-close jobs)
+  server/seed.py                         B
+  server/tests/test_db*.py               B
+
+  server/scraper.py                      C
+  server/ai.py                           C
+  server/content.py                      C   (content service + background loop)
+  server/content_api.py                  C   (Flask blueprint `bp`, admin content)
+  server/tests/test_content*.py          C
+  web/**                                 C
+
+2.1 Shared (append-only, small edits, coordinate):
+  plan/COLLAB.txt         contract changes only, logged in section 14
+  DEVLOG.md               everyone appends (format in section 12)
+  README.md               B creates; everyone adds their own section
+  server/requirements.txt B creates; others may append a line
+  .env.example            B creates; others may append a variable
+  .gitignore              B creates (.env, build/, __pycache__/, logs/, *.exe)
+
+2.2 STUB rule (for working independently):
+If you need a function or file owned by another stream and it doesn't exist
+yet, you MAY create that file containing ONLY the signatures documented in
+section 7, with fake/minimal behaviour, starting with the header line:
+    # STUB created by <A|B|C>. Owner <A|B|C> replaces this file wholesale.
+The owner overwrites stubs without asking. Never put real logic in someone
+else's file. Prefer fakes inside your own tests where possible.
+
+--------------------------------------------------------------------------------
+3. CONFIGURATION (.env in repo root, never committed)
+--------------------------------------------------------------------------------
+  DATABASE_URL      postgres://tsdbadmin:<PASSWORD>@yuaqhx7mx1.x7vocqgcno.tsdb.cloud.timescale.com:38173/tsdb?sslmode=require
+  DB_SCHEMA         oxmarket
+  SECRET_KEY        any random string (Flask sessions)
+  ENGINE_PATH       book/OrderBook/build/MarketServer.exe
+  GEMINI_API_KEY    (provided later. Until then FAKE_AI=1)
+  GEMINI_MODEL      gemini-2.5-flash   (C checks this is the current flash model)
+  FAKE_AI           1 = ai.py returns deterministic canned answers, no network
+  ADMIN_USERNAMES   comma-separated usernames that get is_admin on register
+  DISABLE_JOBS      1 = no background threads start (tests / debugging)
+  PORT              5000
+Load with python-dotenv in app.py. Read config through os.environ only.
+
+--------------------------------------------------------------------------------
+4. DATABASE SAFETY RULES (ABSOLUTE)
+--------------------------------------------------------------------------------
+The Timescale database already contains the owner's other data. DO NOT TOUCH IT.
+  - Every object we create lives in schema `oxmarket`. Every SQL statement
+    is schema-qualified (oxmarket.users, ...) or runs with
+    search_path=oxmarket set on our connections.
+  - NEVER ALTER, DROP, TRUNCATE, or write to anything outside `oxmarket`.
+  - Do NOT run CREATE EXTENSION if timescaledb is already installed (check
+    pg_extension first). If it's missing, stop and ask the owner.
+  - DROP SCHEMA oxmarket CASCADE is allowed ONLY by B, and ONLY during early
+    development before real demo data exists.
+  - Only B runs DDL (schema.sql). A and C never run DDL.
+  - Never commit the password. It lives only in .env.
+
+--------------------------------------------------------------------------------
+5. UNITS AND DOMAIN RULES (everyone must agree)
+--------------------------------------------------------------------------------
+  - Money: integer PENCE everywhere (DB, API, engine). £1,000 = 100000.
+  - New user starting cash: 100000 (£1,000 play money).
+  - House bot user: username "house", is_bot=true, cash 100000000.
+  - Each market has ONE order book for YES shares. Price = integer 1..99 pence,
+    which equals the implied probability in %.
+  - A YES share pays 100p if the market resolves YES, 0p if NO.
+  - "NO" is a view on the YES book:
+        Buy  NO  @ p   ==  Sell YES @ (100 - p)
+        Sell NO  @ p   ==  Buy  YES @ (100 - p)
+    The DB, engine and internal code store everything in YES terms
+    (side 'buy'|'sell' on YES, price in YES pence).
+  - Positions are SIGNED YES share counts. Negative = short YES = long NO.
+    Per market, sum of all users' positions is always 0.
+  - RACES (Union elections): a race = one position in one election, e.g.
+    election "Michaelmas 2026", position "President", seats 1.
+    Each CANDIDATE in a race is its own binary market: "Will <candidate> be
+    elected <position> (Michaelmas 2026)?". It has its own YES book in the
+    engine, so the engine needs no multi-outcome support.
+    Include "RON (Re-Open Nominations)" as a candidate in every race. It's a
+    real option on Union ballots.
+    Across a race, candidate prices should sum to about 100 * seats (an
+    over/under "overround" is shown in the UI, and the MM bot normalises its
+    fair values to that total).
+    A race resolves with a list of winning market ids (length = seats).
+    Winners resolve YES, every other candidate resolves NO.
+    Multi-seat committees: seats = number of places, and each candidate
+    market pays if that candidate wins any seat.
+    All candidate markets in a race share the race's closes_at (when polls
+    close) and its status. Status changes are applied to the race and all its
+    markets together.
+  - Candidates are students standing in a PUBLIC election, so naming them is
+    fine. Markets are ONLY about the election outcome: never allegations,
+    misconduct, personal life, or electoral-malpractice rumours about
+    individuals.
+  - Trades execute at the RESTING (maker) order's price.
+  - Current market probability ("price" in the API), computed by B:
+        1. latest price_tick with both best_bid and best_ask -> round((bid+ask)/2)
+        2. else last trade price
+        3. else markets.ai_prior
+        4. else 50
+  - Equity (leaderboard, portfolio):
+        equity = cash + SUM over markets(position_qty * current_price)
+    (Short positions contribute negatively. Resolved markets contribute 0
+    because positions are zeroed at settlement.)
+  - Market (and race) status lifecycle:
+        proposed -> open -> closed -> resolved
+        proposed -> rejected
+    'proposed' = suggested by Gemini, awaiting admin (approval is per race).
+    'open'     = tradable (engine book exists).
+    'closed'   = past closes_at or closed by admin. No trading, awaiting resolution.
+    'resolved' = outcome set, payouts done.
+  - Timestamps: stored as timestamptz. Sent over the API as ISO 8601 UTC
+    strings with 'Z', e.g. "2026-10-24T14:05:00Z".
+
+--------------------------------------------------------------------------------
+6. DATABASE SCHEMA (schema `oxmarket`, written by B in server/schema.sql)
+--------------------------------------------------------------------------------
+Column lists are the contract. B writes the actual DDL (idempotent:
+CREATE ... IF NOT EXISTS). Types are Postgres types.
+
+users
+  id serial PK | username text UNIQUE NOT NULL | pw_hash text NOT NULL
+  cash bigint NOT NULL default 100000 | is_admin bool default false
+  is_bot bool default false | created_at timestamptz default now()
+
+articles
+  id serial PK | source text NOT NULL   -- 'cherwell'|'oxstu'|'isis'|'union'
+  url text UNIQUE NOT NULL | title text NOT NULL | summary text
+  published_at timestamptz | scraped_at timestamptz default now()
+  processed bool default false   -- true once Gemini has looked at it
+
+races
+  id serial PK | election text NOT NULL   -- e.g. 'Michaelmas 2026'
+  position text NOT NULL   -- e.g. 'President', 'Standing Committee'
+  seats int NOT NULL default 1 | description text
+  resolution_criteria text NOT NULL   -- e.g. 'Official results announced by the Oxford Union / reported by Cherwell'
+  closes_at timestamptz NOT NULL      -- polls close
+  status text NOT NULL default 'proposed'   -- same lifecycle as markets
+  source_name text | source_url text | article_id int NULL -> articles.id
+  ai_reason text NULL | created_by_ai bool default false
+  created_at timestamptz default now() | resolved_at timestamptz NULL
+  UNIQUE (election, position)
+
+markets   (one per candidate)
+  id serial PK | race_id int NOT NULL -> races.id | candidate text NOT NULL
+  question text NOT NULL   -- "Will <candidate> be elected <position> (<election>)?"
+  description text
+  resolution_criteria text NOT NULL | category text default 'union'
+  source_name text | source_url text | article_id int NULL -> articles.id
+  closes_at timestamptz NOT NULL   -- copied from the race
+  status text NOT NULL default 'proposed'  -- see section 5, kept in sync with race
+  outcome text NULL   -- 'YES'|'NO'
+  ai_prior int NULL   -- 1..99, Gemini's initial probability for this candidate
+  ai_reason text NULL | created_by_ai bool default false
+  created_at timestamptz default now() | resolved_at timestamptz NULL
+  UNIQUE (race_id, candidate)
+
+orders
+  id bigint PK   -- allocated from sequence oxmarket.orders_id_seq via
+                 -- db.next_order_id(), and ALSO used as the engine order id
+  market_id int NOT NULL | user_id int NOT NULL
+  side text NOT NULL   -- 'buy'|'sell' (YES terms)
+  price int NOT NULL   -- 1..99 YES terms
+  qty int NOT NULL | qty_remaining int NOT NULL
+  status text NOT NULL   -- 'open'|'filled'|'cancelled'
+  created_at timestamptz default now() | updated_at timestamptz default now()
+
+positions
+  user_id int | market_id int | qty int NOT NULL default 0 (signed YES)
+  net_cost bigint NOT NULL default 0   -- pence paid minus pence received
+  PRIMARY KEY (user_id, market_id)
+
+trades                        HYPERTABLE on time
+  time timestamptz NOT NULL default now() | market_id int NOT NULL
+  price int NOT NULL | qty int NOT NULL
+  buyer_id int NOT NULL | seller_id int NOT NULL
+  taker_side text NOT NULL   -- 'buy'|'sell'
+  maker_order_id bigint | taker_order_id bigint NULL (NULL for market orders)
+  index (market_id, time DESC)
+
+price_ticks                   HYPERTABLE on time
+  time timestamptz NOT NULL default now() | market_id int NOT NULL
+  best_bid int NULL | best_ask int NULL | last_price int NULL
+  index (market_id, time DESC)
+
+portfolio_snapshots           HYPERTABLE on time
+  time timestamptz NOT NULL default now() | user_id int NOT NULL
+  cash bigint NOT NULL | equity bigint NOT NULL
+
+ai_briefs
+  id serial PK | race_id int NULL | market_id int NULL
+                 (briefs + resolution suggestions are per RACE; both NULL = daily digest)
+  kind text NOT NULL   -- 'brief'|'resolution'|'digest'
+  suggested_winner_ids int[] NULL   -- for kind 'resolution'
+  text text NOT NULL | suggested_outcome text NULL | evidence_url text NULL
+  confidence int NULL (0..100) | created_at timestamptz default now()
+
+Continuous aggregates (B):
+  candles_5m, candles_1h on trades:
+    bucket, market_id, open, high, low, close, volume
+    (time_bucket + first(price,time)/max/min/last(price,time)/sum(qty))
+  with refresh policies. Compression policy on price_ticks (> 1 day).
+
+--------------------------------------------------------------------------------
+7. PYTHON INTERNAL INTERFACES (cross-stream function contracts)
+--------------------------------------------------------------------------------
+All modules live flat in server/ and import each other by plain module name
+(app runs as `python server/app.py` from repo root; server/ is on sys.path).
+
+7.1 trading.py (owner A)
+  startup() -> None
+      Start the engine subprocess, send NEW for every market with status
+      'open' (also 'closed', so books can be inspected), replay every
+      orders row with status 'open' (ordered by created_at, id) using the
+      SAME order ids. Called once by app.py.
+  start_background() -> None    starts MM bot thread (unless DISABLE_JOBS=1)
+  open_market(market_id:int) -> None        engine NEW. Idempotent.
+  place_order(user_id, market_id, outcome, side, type, price, qty) -> dict
+      outcome 'YES'|'NO', side 'buy'|'sell', type 'limit'|'market'.
+      Returns {"order": Order|None, "fills": [{"price":int,"qty":int}]}
+      Raises trading.TradingError(message) for any rejection.
+  cancel_order(user_id, order_id, is_admin=False) -> None   raises TradingError
+  open_race(race_id) -> None           open_market for every candidate market
+  close_market(market_id) -> None      cancel all open orders, status 'closed'
+  close_race(race_id) -> None          close_market for each candidate + race 'closed'
+  resolve_market(market_id, outcome:'YES'|'NO') -> None    settle + 'resolved'
+  resolve_race(race_id, winner_market_ids:list[int]) -> None
+      len must equal seats (except the RON case: if RON wins, winners =
+      [RON market]). Winners YES, others NO, race 'resolved'.
+  get_book(market_id, depth=10) -> {"bids":[{"price","qty"}], "asks":[...]}
+      best price first, YES terms
+  available_cash(user_id) -> int   cash not locked by orders / shorts
+  class TradingError(Exception)
+
+7.2 db.py (owner B). Every function takes optional conn=None. If given,
+    use that connection (same transaction). Otherwise get one from the pool.
+  transaction() -> context manager yielding conn (commit/rollback)
+  ensure_schema() -> None          runs schema.sql (idempotent). Called by app.py
+  ensure_bot_user() -> int         returns the house user id
+  # users
+  create_user(username, pw_hash, is_admin=False) -> dict(user)
+  get_user(user_id) -> dict|None ; get_user_by_username(name) -> dict|None
+  adjust_cash(user_id, delta, conn=None) -> None
+  list_users(include_bots=False) -> list[dict]
+  # races
+  create_race(fields:dict) -> int ; get_race(id) -> dict|None
+  find_race(election, position) -> dict|None
+  list_races(status=None) -> list[dict]
+  update_race(id, **fields) -> None   (status/closes_at/... ; when status is
+                                       given, ALSO applies it to all its markets)
+  race_markets(race_id) -> list[dict]  (each with current price)
+  # markets
+  create_market(fields:dict) -> int ; get_market(id) -> dict|None
+  list_markets(status=None, category=None, race_id=None) -> list[dict]
+  update_market(id, **fields) -> None     (status, outcome, question, closes_at,
+                                           resolution_criteria, resolved_at...)
+  current_price(market_id) -> int         rule in section 5
+  # articles
+  insert_article(fields) -> int|None (None if url already exists)
+  get_article(id) -> dict|None ; unprocessed_articles(limit=20) -> list
+  mark_article_processed(id) -> None
+  recent_articles(limit=20, before=None) -> list
+  # orders / positions
+  next_order_id() -> int
+  insert_order(fields, conn=None) -> None
+  update_order(id, qty_remaining, status, conn=None) -> None
+  get_order(id) -> dict|None
+  open_orders(market_id=None, user_id=None) -> list
+  get_position(user_id, market_id, conn=None) -> dict (qty 0 if none)
+  user_positions(user_id) -> list[dict]
+  market_positions(market_id, conn=None) -> list[dict]
+  add_position(user_id, market_id, delta_qty, delta_cost, conn=None) -> None
+  # time series
+  insert_trade(fields, conn=None) -> None
+  record_tick(market_id, best_bid, best_ask, last_price, conn=None) -> None
+  recent_trades(market_id, limit=50) -> list
+  last_trade_price(market_id) -> int|None
+  price_history(market_id, bucket:'1m'|'5m'|'1h', since) -> list[dict]
+  price_at(market_id, t) -> int|None
+  race_history(race_id, bucket, since) -> list[dict]   per-candidate series
+  timemachine(t) -> list[dict]       every race (with candidate prices) as of t
+  equity(user_id) -> int             rule in section 5
+  leaderboard(limit=20) -> list ; equity_history(user_ids, bucket) -> dict
+  # AI
+  save_brief(fields) -> int
+  latest_brief(race_id=None, kind='brief') -> dict|None   (race_id None = digest)
+
+7.3 ai.py / scraper.py / content.py (owner C)
+  scraper.scrape_all() -> int      new Union-related articles inserted
+  ai.extract_races(article:dict) -> list[dict]
+      Union election races mentioned in the article ([] if none):
+      [{"election":"Michaelmas 2026","position":"President","seats":1,
+        "closes_at" (ISO, polls close),"resolution_criteria",
+        "candidates":[{"name":"...","prior":1..99}],   (excluding RON;
+                                                        content.py adds RON)
+        "reason":"..."}]
+  ai.race_brief(race:dict, candidates_history:list, articles:list) -> str
+  ai.detect_result(race:dict, articles:list) -> dict
+      {"winners":[candidate names] | [] if unclear,"confidence":0..100,
+       "evidence_url":str|None,"text":str}
+  ai.daily_digest(races:list) -> str
+  content.process_new_articles() -> int   scrape + extract, returns #races proposed/updated
+  content.start_background() -> None      scrape loop + brief refresh loop
+
+7.4 Who calls whom
+  app.py (B): db.ensure_schema(); db.ensure_bot_user(); trading.startup();
+              register blueprints; trading.start_background();
+              jobs.start_background(); content.start_background()
+  A -> db (all persistence), A -> nothing else
+  B jobs -> trading.get_book (tick snapshots), trading.close_race (auto-close)
+  C admin approve race -> db.update_race(status='open') then trading.open_race
+  C admin add candidate to an open race -> db.create_market then trading.open_market
+  C admin resolve UI -> calls A's endpoint (HTTP), not A's Python directly
+
+--------------------------------------------------------------------------------
+8. ENGINE PROTOCOL (A implements in C++ MarketServer; A uses it from engine.py)
+--------------------------------------------------------------------------------
+  Process: ENGINE_PATH, started by engine.py. Text over stdin/stdout, one
+  command per line, ASCII, space-separated. On start it prints "READY".
+  Every response is zero or more lines followed by a line "END".
+  On error: "ERR <reason>" then "END".
+  trader id = users.id. order id = orders.id (allocated by Python).
+
+  PING                                          -> PONG / END
+  NEW <mkt>                                     -> OK / END   (idempotent)
+  LIMIT <mkt> <orderId> <traderId> <B|S> <price> <qty>
+        -> FILL <makerOrderId> <makerTraderId> <price> <qty>   (0..n lines)
+           RESTING <qtyLeftOnBook>                             (0 if fully filled)
+           END
+  MARKET <mkt> <traderId> <B|S> <qty>
+        -> FILL ... (0..n lines) / UNFILLED <qty> / END
+  CANCEL <mkt> <orderId>                        -> OK / END  or  ERR not_found / END
+  BOOK <mkt> <depth>
+        -> BID <price> <totalQty>  (best first, up to depth)
+           ASK <price> <totalQty>  (best first, up to depth)
+           END
+  QUIT                                          -> process exits
+
+  Example:
+    > LIMIT 3 1042 7 B 60 100
+    < FILL 1031 1 58 40
+    < FILL 1033 1 59 20
+    < RESTING 40
+    < END
+
+--------------------------------------------------------------------------------
+9. HTTP API (all under /api, JSON in/out, session-cookie auth)
+--------------------------------------------------------------------------------
+Errors: HTTP 400 (bad input / rejected), 401 (not logged in), 403 (not admin),
+404 (not found). Body {"error": "human readable message"}.
+Owner in [brackets]. "auth" = logged-in required, "admin" = is_admin required.
+
+Shared objects:
+  User   {"id":1,"username":"alice","cash":100000,"available":95000,"is_admin":false}
+  Market {"id":3,"race_id":1,"candidate":"Jane Doe",
+          "question":"Will Jane Doe be elected President (Michaelmas 2026)?",
+          "description":"...","resolution_criteria":"...","category":"union",
+          "source_name":"Cherwell","source_url":"https://...",
+          "closes_at":"2026-11-27T18:00:00Z","status":"open","outcome":null,
+          "price":62,"change_24h":-4,"volume_24h":350,"ai_prior":55,
+          "created_at":"2026-10-24T10:00:00Z"}
+          (list endpoints add "sparkline":[int,...] = last 24h hourly prices)
+  Race   {"id":1,"election":"Michaelmas 2026","position":"President","seats":1,
+          "closes_at":"2026-11-27T18:00:00Z","status":"open",
+          "source_name":"Cherwell","source_url":"https://...",
+          "resolution_criteria":"...","winners":[] (market ids once resolved),
+          "overround":103 (sum of candidate prices),
+          "candidates":[Market, ...]  sorted by price desc}
+  Order  {"id":1042,"market_id":3,"side":"buy","price":60,"qty":100,
+          "qty_remaining":40,"status":"open","created_at":"..."}   (YES terms)
+  Trade  {"time":"...","price":58,"qty":40,"taker_side":"buy"}
+
+--- Auth [B] ---
+  POST /api/register  {"username","password"}       -> 201 {"user":User}  (logs in)
+  POST /api/login     {"username","password"}       -> {"user":User}
+  POST /api/logout                                  -> {"ok":true}
+  GET  /api/me                                      -> {"user":User} | 401
+  Rules: username 3-20 chars [A-Za-z0-9_], password >= 6 chars.
+  B gets "available" from trading.available_cash(user_id).
+
+--- Races, markets & data [B] ---
+  GET /api/races?status=open|closed|resolved|all  -> {"races":[Race]}
+      default status=open, sorted by closes_at then position order
+      (President, Librarian, Treasurer, Secretary, then committees)
+  GET /api/races/<id>                         -> {"race":Race}
+  GET /api/races/<id>/history?bucket=1m|5m|1h&since=ISO
+      -> {"bucket":"5m","series":[{"market_id","candidate",
+                                   "points":[{"t":ISO,"close":int}]}]}  gap-filled
+  GET /api/markets?status=...&race_id=N        -> {"markets":[Market]}
+  GET /api/markets/<id>                       -> {"market":Market,"race":Race (without candidates)}
+  GET /api/markets/<id>/trades?limit=50       -> {"trades":[Trade]}  newest first
+  GET /api/markets/<id>/history?bucket=1m|5m|1h&since=ISO
+      -> {"bucket":"5m","points":[{"t":ISO,"open":..,"high":..,"low":..,
+                                   "close":..,"volume":..}]}
+         gap-filled (time_bucket_gapfill + locf), so "close" is always set
+         once trading has started. default bucket 5m, since = market created_at
+  GET /api/timemachine/range        -> {"start":ISO,"end":ISO}
+  GET /api/timemachine?t=ISO
+      -> {"t":ISO,
+          "races":[{"id","election","position","seats","status",
+                    "candidates":[{"market_id","candidate","price"}]}],
+          "articles":[{"title","url","source","published_at"}]}  (10 latest <= t)
+         races = those created <= t; status and prices as of t
+         ("who was winning at that moment")
+  GET /api/leaderboard              -> {"leaders":[{"rank","username","equity"}]}
+  GET /api/leaderboard/history?bucket=1h&top=5
+      -> {"series":[{"username","points":[{"t":ISO,"equity":int}]}]}
+
+--- Trading [A] ---
+  GET    /api/markets/<id>/book?depth=10   -> {"bids":[{"price","qty"}],"asks":[...]}
+  POST   /api/orders  auth
+         {"market_id":3,"outcome":"YES"|"NO","side":"buy"|"sell",
+          "type":"limit"|"market","price":60 (limit only, in the CHOSEN outcome's
+          terms),"qty":100}
+         -> 201 {"order":Order|null,"fills":[{"price","qty"}],"user":User}
+            fills prices are YES terms. order null if nothing rests.
+  DELETE /api/orders/<id>  auth (own orders; admin any) -> {"ok":true}
+  GET    /api/orders?status=open|all  auth             -> {"orders":[Order]}
+  GET    /api/portfolio  auth
+         -> {"user":User,"equity":int,
+             "positions":[{"market_id","question","status","qty" (signed YES),
+                           "label":"YES"|"NO","shares" (abs qty),
+                           "price" (current YES price),"value" (qty*price),
+                           "net_cost"}]}
+  POST   /api/admin/races/<id>/close    admin -> {"race":Race}
+  POST   /api/admin/races/<id>/resolve  admin {"winner_market_ids":[3]} -> {"race":Race}
+  (single-market close/resolve also exist for edge cases, e.g. a candidate
+   withdraws: POST /api/admin/markets/<id>/close, /resolve {"outcome"})
+
+--- Content & AI [C] ---
+  GET  /api/articles?limit=20               -> {"articles":[{"id","title","url",
+                                                "source","published_at","summary"}]}
+  GET  /api/races/<id>/brief                -> {"brief":{"text","created_at"}|null}
+  POST /api/races/<id>/brief/refresh   auth -> {"brief":{...}}  (max 1 per 10 min/race)
+  GET  /api/digest                          -> {"digest":{"text","created_at"}|null}
+  GET  /api/admin/proposed  admin
+       -> {"races":[Race + "ai_reason", "article":{"title","url","source"}]}
+          (candidates carry "ai_prior")
+  POST /api/admin/races  admin  {"election","position","seats","closes_at",
+       "resolution_criteria","candidates":[{"name","prior"}]}
+       -> 201 {"race":Race}  (status open; RON added automatically)
+  POST /api/admin/races/<id>/approve admin  optional edits {"position","seats",
+       "closes_at","resolution_criteria","candidates":[{"name","prior"}]}
+       (if candidates is given it replaces the proposed list) -> {"race":Race} (open)
+  POST /api/admin/races/<id>/reject  admin -> {"ok":true}
+  POST /api/admin/races/<id>/candidates admin {"name","prior"}
+       -> 201 {"market":Market}  (opened immediately if race is open)
+  POST /api/admin/scrape             admin -> {"new_articles":int,"races":int}
+  GET  /api/admin/races/<id>/suggest-result admin
+       -> {"winners":[{"market_id","candidate"}],"confidence","evidence_url","text"}
+
+--- Static [B wires, C writes files] ---
+  Flask serves web/ at "/" (static_folder = ../web, static_url_path = "").
+  "/" -> web/index.html. Pages use query strings, e.g. market.html?id=3.
+
+--------------------------------------------------------------------------------
+10. BACKGROUND JOBS (daemon threads, none if DISABLE_JOBS=1)
+--------------------------------------------------------------------------------
+  Owner  Interval  Job
+  A      10 s      MM bot requotes every open market (fair values normalised per race)
+  B      15 s      price tick snapshot for every open market (trading.get_book depth 1)
+  B      60 s      auto-close races past closes_at (trading.close_race)
+  B      5 min     portfolio_snapshots for every non-bot user
+  C      30 min    scrape all sources, then Gemini-extract races/candidates from new
+                   articles (and detect results for closed races)
+  C      30 min    refresh briefs for open races where any candidate moved >= 5 points in 24h
+  C      24 h      daily digest
+  Every job catches and logs its own exceptions. A job must never kill the app.
+  A ALSO records a tick right after any order that produced fills
+  (db.record_tick in the same transaction as the trades).
+
+--------------------------------------------------------------------------------
+11. GIT WORKFLOW
+--------------------------------------------------------------------------------
+  - Branches: engine (A), data (B), content (C). main = integrated.
+  - Commit small and often, with clear messages. Never commit .env or binaries.
+  - Merge to main at milestones (section 13). Resolve conflicts in favour of
+    the file's owner. STUB files are always replaced by the owner's version.
+  - Do not push or force-push unless the owner says so.
+
+--------------------------------------------------------------------------------
+12. LOGGING
+--------------------------------------------------------------------------------
+  DEVLOG.md (repo root): append, never rewrite others' entries. Format:
+      ## 2026-10-24 14:05 [A] Short title
+      - what was built / decided / broke and how it was fixed
+      - prize-relevant notes (Timescale feature used, Gemini prompt, etc.)
+  Write an entry at least at the end of every numbered task in your file.
+  This is the raw material for the Devpost + Dev Writing Challenge write-ups.
+  App logs: Python `logging`, logger name = module name, to console and
+  server/logs/app.log (B configures logging in app.py).
+
+--------------------------------------------------------------------------------
+13. MILESTONES (integration checkpoints)
+--------------------------------------------------------------------------------
+  M0  Skeleton: B's app.py runs, schema applied, /api/me works, web/ served.
+  M1  End-to-end trading: register -> buy YES / buy NO -> fills in DB, book
+      and chart update on the market page. Seed markets visible. MM bot quoting.
+  M2  News -> race: real Union election article scraped -> Gemini (or
+      FAKE_AI) extracts position + candidates -> admin approves the race ->
+      candidate markets open -> MM bot quotes at normalised ai_priors.
+  M3  TIME demo: Time Machine slider showing who was winning each position
+      over time, candles, leaderboard history, Gemini brief on a race that
+      moved. Close race at polls-close, then resolve with winners and payouts.
+  M4  Polish: README, demo script, DEVLOG cleaned into a write-up.
+
+Demo is judged on: real Union election coverage turning into markets, live
+odds per candidate, Time Machine of the race, Gemini explanations, use of
+Timescale features.
+
+--------------------------------------------------------------------------------
+14. CONTRACT CHANGE LOG
+--------------------------------------------------------------------------------
+  (append: date time [X] what changed and why)
+  2026-10-24 [owner] Initial version.
+  2026-10-24 [owner] Scope narrowed to Oxford Union elections only. Cuppers/
+             sport and general news dropped (Cuppers is hard to scrape). Added
+             races table, candidate markets (markets.race_id/candidate), race
+             endpoints, race-level admin/briefs, and timemachine returning races.

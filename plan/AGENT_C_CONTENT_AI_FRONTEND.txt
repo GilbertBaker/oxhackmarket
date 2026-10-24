@@ -1,0 +1,314 @@
+================================================================================
+AGENT C: CONTENT (SCRAPING), GEMINI AI & FRONTEND
+================================================================================
+READ FIRST: plan/COLLAB.txt (the shared contract: schema, API, units, ownership,
+DB safety rules). This file plus COLLAB.txt is everything you need. If the two
+conflict, COLLAB.txt wins. Raise the conflict in its change log.
+
+You are one of three parallel streams (A = Engine & Trading, B = Data & TIME,
+C = you). Don't wait for the others. Build the frontend against the example
+JSON in COLLAB 9 (use a mock mode, see C6) and the backend against the STUB
+rule (COLLAB 2.2).
+
+CURRENT SCOPE: OXFORD UNION ELECTIONS ONLY
+  Markets are "who wins each position" in Oxford Union elections (President,
+  Librarian, Treasurer, Secretary, Standing Committee, Secretary's Committee,
+  ...). A RACE = one position in one election. Each candidate in a race is a
+  binary market. Every race also gets a "RON (Re-Open Nominations)"
+  candidate. Read COLLAB 5 "RACES" carefully. Cuppers, sport and general news
+  are OUT of scope. Ignore those articles.
+
+MISSION
+1. Pull Union election coverage (candidate announcements, hustings,
+   endorsements, results) from Cherwell, Oxford Student (OxStu), The Isis
+   and the Oxford Union's own site into the DB.
+2. Use the Gemini API (MLH "Best Use of Gemini API" prize) to extract
+   races + candidates from articles, explain how races have moved, and
+   detect results for resolution.
+3. Build the whole website in plain HTML/CSS/JS, with the TIME theme
+   front and centre ("watch the election swing over time").
+The GEMINI_API_KEY arrives LATER. Everything must work with FAKE_AI=1 first.
+
+YOU OWN (only edit these, plus the shared files in COLLAB 2.1)
+  server/scraper.py  server/ai.py  server/content.py  server/content_api.py
+  server/tests/test_content*.py  web/**
+
+YOU DEPEND ON
+  B: db.py functions (COLLAB 7.2), app.py registering content_api.bp and
+     calling content.start_background(), auth endpoints, race/data endpoints.
+  A: trading.open_race() / open_market() (on approve / add candidate),
+     trading endpoints for the UI (book, orders, portfolio, race resolve).
+  Nobody calls your Python except app.py. The frontend calls everyone.
+
+--------------------------------------------------------------------------------
+TASKS (do in order; each ends with a DEVLOG entry)
+--------------------------------------------------------------------------------
+C1. Source discovery (read-only research, no code yet)
+  - Find working feeds/pages. Record URLs, item fields and update frequency
+    in DEVLOG. Candidates (verify every one; WordPress sites usually expose
+    /feed/ on tags and categories too):
+      https://cherwell.org/feed/                    (filter for Union)
+      https://cherwell.org/tag/oxford-union/feed/   (if this tag exists)
+      https://www.oxfordstudent.com/feed/           (Oxford Student / OxStu)
+      https://isismagazine.org.uk/feed/             (The Isis)
+      https://oxford-union.org/                     (official: look for an
+        elections/results/candidates page. Often the authoritative source
+        for candidate lists and results.)
+  - Check each site's robots.txt and respect it. If a feed doesn't exist,
+    pick the section page and the CSS selectors for headline/link/date as an
+    HTML fallback.
+  - Find out (and record) the Union election calendar for Michaelmas 2026:
+    nominations, hustings, polling day (traditionally Friday of 7th week)
+    and when results are announced. This sets races' closes_at.
+  - Collect 3-5 past Union election articles (e.g. previous terms' results
+    and candidate announcements) as test fixtures and prompt examples.
+
+C2. server/scraper.py
+  - SOURCES = list of {name, source_key ('cherwell'|'oxstu'|'isis'|'union'),
+    feed_url, fallback_url, selectors}.
+  - Relevance filter BEFORE insert (keeps the DB on-topic): keep an item
+    only if title or summary matches Union-election keywords
+    (case-insensitive): "Oxford Union", "Union election", "President-elect",
+    "Librarian", "Treasurer", "Standing Committee", "Secretary's Committee",
+    "hustings", "slate", "RON", "re-open nominations", "candidates", "OxUnion".
+    Plain "Union" alone is too broad (e.g. Student Union / SU elections are
+    a DIFFERENT body), so require "Oxford Union" or an election-position
+    keyword together with "Union". Items from source 'union' are always kept.
+  - scrape_all() -> int: for each source, fetch with requests (timeout 15 s,
+    User-Agent "OxMarket-OxHack/1.0 (student hackathon project)"), parse
+    with feedparser (BeautifulSoup fallback), normalise to {source, url,
+    title, summary (plain text, max ~800 chars, strip HTML), published_at
+    (UTC)}, filter, then db.insert_article (dup url -> skipped). One failing
+    source never stops the others. Log counts per source (fetched / kept).
+  - Store only headline, short summary and link. Never copy full articles.
+    You MAY fetch the full article page transiently to give Gemini the
+    candidate list (candidate names are often only in the body). Never
+    store or display the body text.
+  - Test with saved sample feed XML/HTML in server/tests/fixtures/ (no
+    network in unit tests), including a Student Union article that must be
+    filtered OUT.
+
+C3. server/ai.py (Gemini, signatures fixed in COLLAB 7.3)
+  - SDK: google-genai (from google import genai; client =
+    genai.Client(api_key=...)). Model from GEMINI_MODEL. When the key
+    arrives, confirm the current recommended flash model name and update
+    .env.example if needed.
+  - FAKE_AI=1 (or no key): deterministic canned outputs so the whole
+    pipeline runs offline. E.g. extract_races returns, for any article whose
+    title contains "Union", one race {election "Michaelmas 2026", position
+    "President", seats 1, closes_at = the next polling day, candidates
+    "Fake Candidate 1/2/3" priors 40/35/20}. detect_result returns winners
+    [] (unclear) unless the article title contains "elected". Every function
+    supports fake mode.
+  - Use structured JSON output (response_mime_type="application/json" plus
+    a response_schema) for extract_races and detect_result. Validate in
+    Python: position non-empty; seats 1..10; 2..12 candidates with unique
+    non-empty names; priors 1..99; closes_at in the future and within 4
+    months; election matches "(Michaelmas|Hilary|Trinity) YYYY". Drop
+    invalid races. Return [] / empty winners on anything invalid.
+  - extract_races(article, body_text=None) prompt requirements:
+      * Extract ONLY Oxford Union (the debating society) elections. Ignore
+        the Oxford SU / college JCR elections and everything else.
+      * Each race: election term, exact position title, seats (e.g.
+        Standing Committee has several), the confirmed candidates named in
+        the text (no guessing, and no people merely rumoured), polling
+        date/time if stated (else null, and content.py uses the known
+        polling day from C1).
+      * Exclude "RON". content.py always adds it.
+      * prior per candidate = honest win probability (sum ~100*seats)
+        using only signals in the text (incumbency/slates/endorsements/
+        uncontested), plus a one-line reason. If no signal, use equal priors.
+      * Never output allegations, misconduct, personal details or anything
+        beyond name + position. Names exactly as printed.
+      * Include today's date (UTC) in the prompt.
+      * Return [] for articles that are about the Union but contain no
+        election race (e.g. a speaker event).
+  - race_brief(race, candidates_history, articles): input = race position,
+    each candidate's hourly price series (last 24-72h from
+    db.race_history), volumes, recent related articles. Output: 2-4
+    sentences, "who's leading, who moved and the likely reason (cite which
+    article)", no invented facts, neutral tone about candidates. If nothing
+    moved, say so.
+  - detect_result(race, articles): give the race, candidate names and
+    articles published after the race's created_at. Output the COLLAB 7.3
+    dict. Winners must be names from the candidate list (or "RON"). Return
+    empty winners when the result isn't stated explicitly.
+  - daily_digest(races): a short "Union election odds today" paragraph:
+    favourites per position and biggest movers.
+  - Rate limiting/cost: one call at a time (lock), at most N articles per
+    scrape run (env AI_MAX_PROPOSALS, default 10), retry once on transient
+    errors, log every call (prompt kind, latency, success).
+  - Save each prompt template as a constant at the top of ai.py (the write-up
+    will quote them).
+
+C4. server/content.py
+  - process_new_articles(): scraper.scrape_all(), then for each
+    db.unprocessed_articles(): races = ai.extract_races(article, body). For
+    each race:
+      existing = db.find_race(election, position)
+      none   -> db.create_race({status 'proposed', created_by_ai True,
+                ai_reason, article_id, source_name, source_url, ...}), then
+                one db.create_market per candidate (question "Will <name> be
+                elected <position> (<election>)?", ai_prior, status
+                'proposed', closes_at = race closes_at, category 'union')
+                plus a RON market (prior = whatever is left so the total is
+                ~100*seats, min 3).
+      proposed -> add newly named candidates as extra proposed markets.
+      open     -> do NOT add automatically. Log it and include the new
+                  names in the race's ai_reason so the admin sees "new
+                  candidates mentioned: X" (the admin adds them via the
+                  add-candidate endpoint).
+      closed   -> run ai.detect_result on the article and save_brief(kind
+                  'resolution', suggested_winner_ids, confidence,
+                  evidence_url). NEVER auto-resolve. The admin confirms.
+    Always mark_article_processed. Returns the number of races
+    created/updated.
+  - start_background() (unless DISABLE_JOBS=1): daemon threads for
+    process_new_articles every 30 min (first run 30 s after start), brief
+    refresh every 30 min for open races where any candidate moved >= 5
+    points in 24h, daily digest every 24 h (also at start if none exists
+    today). Every loop has try/except + logging.
+  - refresh_brief(race_id) -> dict, used by the loop and the refresh
+    endpoint: gathers inputs, calls ai.race_brief, then db.save_brief(kind
+    'brief', race_id).
+
+C5. server/content_api.py (Flask blueprint `bp`)
+  Endpoints exactly as COLLAB 9 "Content & AI [C]": articles, race brief,
+  brief refresh (rate-limited to 1 per 10 min per race, checked via
+  latest_brief created_at), digest, admin proposed / create race / approve
+  / reject / add candidate / scrape / suggest-result.
+  - Create race (manual): validates like extract_races, creates race +
+    candidate markets + RON, status 'open', then trading.open_race.
+  - Approve: apply edits (if "candidates" is given, replace the proposed
+    candidate markets with that list + RON), then db.update_race(status
+    'open') (propagates to markets), then trading.open_race(id).
+  - Reject: db.update_race(status 'rejected').
+  - Add candidate: create_market in the race (same status as the race). If
+    the race is open, trading.open_market(id).
+  - Suggest result: ai.detect_result on articles since the race was created.
+    Map names to market ids, save_brief(kind 'resolution'), return the
+    COLLAB shape. Resolution itself is A's endpoint (the admin UI calls it).
+  Admin check: your own helper or B's admin_required. Errors: 400/403/404
+  {"error"}.
+
+C6. Frontend: web/ (plain HTML/CSS/JS, Chart.js CDN only)
+  Files:
+    web/index.html          election home: all races
+    web/race.html           one position (race.html?id=1): all candidates
+    web/market.html         one candidate market + trading (market.html?id=3)
+    web/timemachine.html    the TIME feature
+    web/leaderboard.html
+    web/portfolio.html
+    web/admin.html
+    web/login.html          login + register tabs
+    web/css/style.css
+    web/js/api.js           fetch wrapper: api.get/post/del, JSON, credentials
+                            'same-origin', throws {status, error}. MOCK mode:
+                            if localStorage.mock==="1" or ?mock=1, return
+                            example JSON (web/js/mock.js: a fake election
+                            with 4 races built from the COLLAB 9 examples), so
+                            the UI can be built before the backend exists.
+    web/js/common.js        navbar (shows user + cash from /api/me, login/logout,
+                            admin link if is_admin), formatting helpers:
+                            pence -> "£12.34", price -> "62%", countdown text,
+                            relative time.
+    web/js/<page>.js        one script per page
+  Global design:
+    - Clean, readable Oxford Union feel (dark blue #002147, deep red
+      accents, serif headings), a responsive grid, and no frameworks.
+    - Prices always shown both ways: "YES 62p · NO 38p" = "62% chance".
+    - Live countdown to polls closing on every race (TIME theme).
+    - Poll: market/race page every 2 s (book, trades, prices) and every
+      10 s (history), home every 10 s. Pause when the tab is hidden.
+    - Candidate names are shown neutrally, with no photos or extra
+      personal info.
+  Pages:
+    index:  hero "Michaelmas 2026 Union Elections" with a countdown to
+            polling day; digest banner (GET /api/digest); one card per race
+            in position order (from /api/races): position, seats, candidates
+            as horizontal probability bars sorted by price with change_24h
+            arrows, the favourite highlighted, overround shown small
+            ("book total 103%"). Tabs: Open / Closed (awaiting result) /
+            Resolved (shows winners). Latest Union headlines sidebar
+            (GET /api/articles).
+    race:   position title, criteria, source links, countdown; multi-line
+            Chart.js chart, one line per candidate (/api/races/<id>/history,
+            1m/5m/1h toggle); candidate table (price, change, volume,
+            quick "Buy YES"/"Buy NO" buttons linking to market.html); the
+            Gemini "Why did the race move?" brief with refresh and a
+            "Generated by Gemini" label; resolved banner with winners.
+    market: candidate + position header with a link back to the race;
+            probability chart (/api/markets/<id>/history); order ticket:
+            Buy YES / Buy NO tabs ("<Name> wins" / "<Name> doesn't win"),
+            limit or market, price slider 1-99 in the chosen outcome's
+            terms, qty, live cost preview ("Cost £6.00 · pays £10.00 if
+            <Name> wins · potential profit £4.00"), errors inline, cash
+            refreshed after each order; depth ladder (asks above, bids
+            below, YES prices with the NO equivalent greyed); recent trades
+            tape; your open orders on this market with cancel buttons.
+    timemachine: the hero TIME feature. A range slider from
+            /api/timemachine/range start to end, play/pause that animates
+            through time, a date-time label. At each position, GET
+            /api/timemachine?t=... (debounced ~150 ms) and show every race
+            with candidate bars that animate and re-sort as the lead
+            changes ("who was winning at that moment"), plus "headlines as
+            of then". Mark lead changes on the slider track if cheap to
+            compute.
+    leaderboard: ranked table + "Hindsight" chart of top-5 equity over time
+            (/api/leaderboard/history).
+    portfolio: cash, available, equity; positions grouped by race
+            (candidate, YES/NO label, shares, price, value, net cost, P&L);
+            open orders with cancel.
+    admin:  "Scrape now" (shows new_articles/races); proposed races queue,
+            each with the source article link, Gemini reason, editable
+            position/seats/closes_at/criteria and an editable candidate list
+            with priors (add/remove rows), Approve/Reject; "Create race
+            manually" form; open races with "Add candidate" and Close;
+            closed races with "Suggest result (Gemini)" showing suggested
+            winners + evidence link + confidence, pre-ticking those
+            candidates, and a "Resolve with selected winners" button
+            (A's POST /api/admin/races/<id>/resolve) behind a confirm dialog.
+    login:  register/login forms -> redirect to index.
+  Accessibility: labels on inputs, keyboard-usable slider/buttons, colour
+  is never the only signal (arrows plus text).
+
+C7. Integration & write-up
+  - Turn mock mode off and test every page against the real backend at M1-M3.
+    Fix shape mismatches by agreeing a COLLAB change first.
+  - README section "Union news & Gemini": sources, the pipeline diagram
+    (scrape -> relevance filter -> Gemini extracts races/candidates -> admin
+    approves -> candidate markets open -> MM bot quotes at priors -> briefs
+    -> result detection -> admin resolves), the prompts, safety rules.
+  - Prepare the demo script (in README or DEVLOG): which pages to show in
+    what order, ~3 minutes, ending on the Time Machine replaying the race.
+
+--------------------------------------------------------------------------------
+VERIFICATION (must pass before you call your stream done)
+--------------------------------------------------------------------------------
+  [ ] DEVLOG lists the verified feed URLs, robots.txt notes and the
+      Michaelmas 2026 Union election calendar.
+  [ ] pytest server/tests/test_content*.py passes: feed fixture parsing,
+      HTML stripping, Union relevance filter (SU article rejected),
+      duplicate URLs skipped, FAKE_AI extraction validates, invalid Gemini
+      JSON -> [], RON added with sensible prior, an existing proposed race
+      gets new candidates merged and isn't duplicated, brief refresh rate
+      limit.
+  [ ] With FAKE_AI=1: POST /api/admin/scrape inserts real Union articles and
+      creates 'proposed' races. Approving one opens all its candidate
+      markets, and within ~15 s each shows a 2-sided book (A's MM bot) with
+      prices summing to ~100 per race.
+  [ ] With a real key (once provided): races and candidates correctly
+      extracted from at least 2 real articles (or past-election fixtures),
+      plus one race brief and one result detection logged for the write-up.
+  [ ] Every page works in mock mode AND against the live backend. No console
+      errors. Usable at 375 px width (mobile) and on desktop.
+  [ ] Buying NO on a candidate sends outcome "NO" with the NO-terms price, and
+      the fill shows in the portfolio as a NO position under that race.
+  [ ] DEVLOG entries for C1-C7.
+
+RULES REMINDER
+  - Never run DDL or SQL directly. Use db.py functions only (COLLAB 4).
+  - Never hardcode or commit the Gemini key. Read it from env.
+  - Never auto-resolve a race. Gemini only suggests and the admin confirms.
+  - Don't edit A's or B's files except as marked STUBs.
+  - Plain HTML/CSS/JS only. Chart.js via CDN is the single allowed library.
