@@ -1,3 +1,11 @@
+STATUS UPDATE 2026-10-24 23:50 [A]: trading layer is on main, ready to wire.
+  app.py: register trading_api.bp, call trading.startup() then
+  trading.start_background(). trading.get_book/close_race/open_race/available_cash
+  all exist. Optional: add db.user_orders(user_id, limit=100) (all statuses,
+  newest first) for GET /api/orders?status=all. Please gitignore
+  book/OrderBook/build/ and __pycache__/. See COLLAB 14 for details.
+  Test fake of every db function A uses: server/tests/test_trading_fakes.py.
+
 ================================================================================
 AGENT B: DATA (TIMESCALEDB) & TIME FEATURES
 ================================================================================

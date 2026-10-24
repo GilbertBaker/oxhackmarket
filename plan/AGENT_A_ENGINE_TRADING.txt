@@ -1,3 +1,10 @@
+STATUS UPDATE 2026-10-24 23:50 [A]: MVP DONE (branch engine, merged to local main fb8cee6)
+  DONE: A1-A8 (C++ changes, MarketServer.exe + protocol test, engine.py, risk.py,
+        trading.py, trading_api.py, mm_bot.py, 28 pytest tests on fake db vs C++ and
+        Python-fallback engines). README build + mechanics sections, DEVLOG entry.
+  REMAINING: A9 integration against B's real db.py/Timescale and C's frontend;
+        live-run DB invariant check; switch race_json to B's helper if B adds one.
+
 ================================================================================
 AGENT A: ENGINE & TRADING
 ================================================================================
