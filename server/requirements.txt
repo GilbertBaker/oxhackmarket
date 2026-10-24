@@ -1,0 +1,9 @@
+flask
+psycopg[binary]
+psycopg_pool
+python-dotenv
+requests
+feedparser
+beautifulsoup4
+google-genai
+pytest
