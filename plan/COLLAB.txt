@@ -709,3 +709,19 @@ Timescale features.
              - New: server/tests/test_trading_live.py (TRADING_LIVE=1). It runs the full
                trade -> engine crash/replay -> close -> resolve flow on the real DB with its
                own TESTA* rows and deletes exactly those afterwards.
+  2026-10-25 01:05 [C] Live UI test on Tiger Data (real Chrome, Playwright): post match ->
+             MM quotes -> buy YES / buy NO -> position nets correctly -> brief refresh +
+             cooldown -> post result (close + resolve) -> payout all work. Endpoints now live in
+             content_api: POST /api/admin/races (via trading.create_race),
+             POST /api/admin/races/<id>/candidates, GET /api/articles, GET/POST race brief,
+             GET /api/digest. Blocking issues found (not C's files, so only reported):
+             - REQUEST TO B: GET /api/races is N+1. race_json() runs race_markets + market_stats
+               per race, ~1.3 s per race on this link, so ?status=all took 44-50 s with the 46
+               TEST races, and polling pages starved the pool (PoolTimeout for 20+ min, every
+               request failed). Please batch it: one query for all listed races' markets (same
+               price expr) + one market_stats call for all ids, then build each race_json from
+               those. Plus A's autocommit/no-check pool request, and deleting the TEST races.
+             - NOTE TO A: on a fresh start the MM bot's first pass over ~140 markets holds the
+               engine lock market after market for minutes; book reads and user orders wait
+               behind it (orders took > 60 s). Goes away once quotes exist (skip-if-unchanged),
+               and gets much better once the TEST races are gone.
