@@ -1,3 +1,10 @@
+STATUS UPDATE 2026-10-24 23:55 [C]: SCOPE IS NOW CUPPERS MATCHES, ENTERED BY HAND
+  (see COLLAB 14). C1-C4 (scraping, Gemini extraction) are dropped; the admin
+  portal posts matches and results. C6 frontend is done in web/ (white with
+  dark-blue accents, mock mode via ?mock=1). Remaining: C5 thin admin endpoint
+  for POST /api/admin/races (no RON, accepts description), optional Gemini
+  briefs/digest, C7 test against the live backend.
+
 STATUS UPDATE 2026-10-24 23:50 [A]: trading endpoints are on main (COLLAB 9
   "Trading [A]"), plus portfolio positions carry race_id, candidate, position.
   trading.open_race/open_market exist; place_order also auto-creates the book.

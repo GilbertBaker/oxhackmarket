@@ -4,6 +4,8 @@ validate -> map to YES terms -> risk check -> engine -> one DB transaction.
 """
 import logging
 import os
+import re
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 
 import db
@@ -86,17 +88,35 @@ def get_book(market_id, depth=10):
         raise
 
 
-def _risk_inputs(user_id):
-    user = db.get_user(user_id)
+@contextmanager
+def _session(conn=None):
+    """Reuse the caller's connection/transaction, or open one. One pooled connection per
+    operation instead of one per db call: each checkout costs extra round trips to the cloud DB."""
+    if conn is not None:
+        yield conn
+    else:
+        with db.transaction() as c:
+            yield c
+
+
+def _batch(conn):
+    """psycopg pipeline: statements that don't return rows go out together in one round
+    trip (a fetch forces a sync, so reads stay correct). No-op for the test fake."""
+    return conn.pipeline() if hasattr(conn, "pipeline") else nullcontext()
+
+
+def _risk_inputs(user_id, conn=None):
+    user = db.get_user(user_id, conn=conn)
     if user is None:
         raise TradingError("Unknown user")
-    positions = db.user_positions(user_id)
-    orders = db.open_orders(user_id=user_id)
+    positions = db.user_positions(user_id, conn=conn)
+    orders = db.open_orders(user_id=user_id, conn=conn)
     return user, positions, orders
 
 
-def available_cash(user_id):
-    user, positions, orders = _risk_inputs(user_id)
+def available_cash(user_id, conn=None):
+    with _session(conn) as c:
+        user, positions, orders = _risk_inputs(user_id, c)
     return risk.available(user["cash"], positions, orders)
 
 
@@ -114,8 +134,15 @@ def _order_json(fields):
         "created_at": fields.get("created_at") or _now()}
 
 
-def place_order(user_id, market_id, outcome, side, type, price, qty):
-    # 1. validate
+# called as fn(market_id, fills) after every committed order with fills (mm_bot keeps its EMA here)
+fill_listeners = []
+
+
+def place_order(user_id, market_id, outcome, side, type, price, qty, *, _trusted_market=None, _conn=None):
+    """_trusted_market / _conn are internal (mm_bot only): the caller already holds the open
+    market row and a transaction, and the house account skips the risk check (its cash covers
+    any quote)."""
+    # 1. validate the request itself (no DB needed)
     outcome = (outcome or "").upper()
     if outcome not in OUTCOMES:
         raise TradingError("outcome must be YES or NO")
@@ -138,94 +165,130 @@ def place_order(user_id, market_id, outcome, side, type, price, qty):
             raise TradingError("price must be between 1 and 99")
     else:
         price = None
-    market = db.get_market(market_id)
-    if market is None:
-        raise TradingError("Market not found")
-    if market["status"] != "open":
-        raise TradingError(f"Market is {market['status']}, not open for trading")
 
     # 2. YES terms
     yside, yprice = _to_yes(outcome, side, price)
 
     eng = _engine()
+    # Lock first, then the transaction, so the commit happens before the lock is released:
+    # the next order's risk check must see this order's cash and positions.
     with eng.lock:
-        # an open market always has a book, even if nobody called open_market (NEW is idempotent)
-        eng.new_market(market_id)
-
-        # 3. risk
-        user, positions, orders = _risk_inputs(user_id)
-        if type == "limit":
-            try:
-                risk.check_order(user["cash"], positions, orders, market_id, yside, yprice, qty)
-            except risk.RiskError as e:
-                raise TradingError(str(e))
-        else:
-            book = eng.book(market_id, 1000)
-            levels = book["asks"] if yside == "buy" else book["bids"]
-            affordable, fillable = risk.max_affordable_market_qty(
-                user["cash"], positions, orders, market_id, yside, levels, qty)
-            if fillable == 0:
-                raise TradingError("No liquidity")
-            if affordable == 0:
-                raise TradingError("Insufficient funds")
-            qty = affordable
-
-        # 4. engine
-        order_id = None
-        if type == "limit":
-            order_id = db.next_order_id()
-            fills, resting = eng.limit(market_id, order_id, user_id, yside, yprice, qty)
-        else:
-            fills, _unfilled = eng.market(market_id, user_id, yside, qty)
-            resting = 0
-
-        # 5. persist
-        order_fields = None
+        matched = False
         try:
-            with db.transaction() as conn:
-                for f in fills:
-                    p, q = f["price"], f["qty"]
-                    if yside == "buy":
-                        buyer, seller = user_id, f["maker_trader_id"]
-                    else:
-                        buyer, seller = f["maker_trader_id"], user_id
-                    db.adjust_cash(buyer, -p * q, conn=conn)
-                    db.adjust_cash(seller, p * q, conn=conn)
-                    db.add_position(buyer, market_id, q, p * q, conn=conn)
-                    db.add_position(seller, market_id, -q, -p * q, conn=conn)
-                    maker = db.get_order(f["maker_order_id"])
-                    left = (maker["qty_remaining"] if maker else q) - q
-                    db.update_order(f["maker_order_id"], left, "filled" if left <= 0 else "open", conn=conn)
-                    db.insert_trade({"market_id": market_id, "price": p, "qty": q,
-                                     "buyer_id": buyer, "seller_id": seller, "taker_side": yside,
-                                     "maker_order_id": f["maker_order_id"], "taker_order_id": order_id},
-                                    conn=conn)
+            with _session(_conn) as conn:
+                market = _trusted_market or db.get_market(market_id, conn=conn)
+                if market is None:
+                    raise TradingError("Market not found")
+                if market["status"] != "open":
+                    raise TradingError(f"Market is {market['status']}, not open for trading")
+                # an open market always has a book, even if nobody called open_market (NEW is idempotent)
+                eng.new_market(market_id)
+
+                # 3. risk
+                if _trusted_market is not None and type == "limit":
+                    pass
+                elif type == "limit":
+                    user, positions, orders = _risk_inputs(user_id, conn)
+                    try:
+                        risk.check_order(user["cash"], positions, orders, market_id, yside, yprice, qty)
+                    except risk.RiskError as e:
+                        raise TradingError(str(e))
+                else:
+                    user, positions, orders = _risk_inputs(user_id, conn)
+                    book = eng.book(market_id, 1000)
+                    levels = book["asks"] if yside == "buy" else book["bids"]
+                    affordable, fillable = risk.max_affordable_market_qty(
+                        user["cash"], positions, orders, market_id, yside, levels, qty)
+                    if fillable == 0:
+                        raise TradingError("No liquidity")
+                    if affordable == 0:
+                        raise TradingError("Insufficient funds")
+                    qty = affordable
+
+                # 4. engine
+                order_id = None
                 if type == "limit":
-                    order_fields = {"id": order_id, "market_id": market_id, "user_id": user_id,
-                                    "side": yside, "price": yprice, "qty": qty, "qty_remaining": resting,
-                                    "status": "open" if resting > 0 else "filled"}
-                    db.insert_order(order_fields, conn=conn)
-                if fills:
-                    top = eng.book(market_id, 1)
-                    db.record_tick(market_id,
-                                   top["bids"][0]["price"] if top["bids"] else None,
-                                   top["asks"][0]["price"] if top["asks"] else None,
-                                   fills[-1]["price"], conn=conn)
+                    order_id = db.next_order_id(conn=conn)
+                    fills, resting = eng.limit(market_id, order_id, user_id, yside, yprice, qty)
+                    leftover = resting
+                else:
+                    fills, leftover = eng.market(market_id, user_id, yside, qty)
+                    resting = 0
+                matched = True
+
+                # 5. persist. Price-time sweep: every maker except the last one touched is fully
+                # filled, and so is the last one if the taker has qty left over. Only that last
+                # maker needs a DB read (done before the batch, since it returns a row).
+                last_left = 0
+                if fills and leftover == 0:
+                    maker = db.get_order(fills[-1]["maker_order_id"], conn=conn)
+                    last_left = (maker["qty_remaining"] if maker else fills[-1]["qty"]) - fills[-1]["qty"]
+                top = eng.book(market_id, 1) if fills else None
+                order_fields = None
+                with _batch(conn):
+                    cash_d, pos_d = {}, {}
+                    for i, f in enumerate(fills):
+                        p, q = f["price"], f["qty"]
+                        if yside == "buy":
+                            buyer, seller = user_id, f["maker_trader_id"]
+                        else:
+                            buyer, seller = f["maker_trader_id"], user_id
+                        cash_d[buyer] = cash_d.get(buyer, 0) - p * q
+                        cash_d[seller] = cash_d.get(seller, 0) + p * q
+                        pq, pc = pos_d.get(buyer, (0, 0))
+                        pos_d[buyer] = (pq + q, pc + p * q)
+                        pq, pc = pos_d.get(seller, (0, 0))
+                        pos_d[seller] = (pq - q, pc - p * q)
+                        left = last_left if i == len(fills) - 1 else 0
+                        db.update_order(f["maker_order_id"], left, "filled" if left <= 0 else "open", conn=conn)
+                        db.insert_trade({"market_id": market_id, "price": p, "qty": q,
+                                         "buyer_id": buyer, "seller_id": seller, "taker_side": yside,
+                                         "maker_order_id": f["maker_order_id"], "taker_order_id": order_id},
+                                        conn=conn)
+                    # one cash + one position write per user, however many levels were swept
+                    for uid, d in cash_d.items():
+                        if d:
+                            db.adjust_cash(uid, d, conn=conn)
+                    for uid, (dq, dc) in pos_d.items():
+                        if dq or dc:
+                            db.add_position(uid, market_id, dq, dc, conn=conn)
+                    if type == "limit":
+                        order_fields = {"id": order_id, "market_id": market_id, "user_id": user_id,
+                                        "side": yside, "price": yprice, "qty": qty, "qty_remaining": resting,
+                                        "status": "open" if resting > 0 else "filled"}
+                        db.insert_order(order_fields, conn=conn)
+                    if fills:
+                        db.record_tick(market_id,
+                                       top["bids"][0]["price"] if top["bids"] else None,
+                                       top["asks"][0]["price"] if top["asks"] else None,
+                                       fills[-1]["price"], conn=conn)
+        except TradingError:
+            raise
         except Exception:
-            log.exception("DB write failed after engine match (market %s, order %s); resyncing engine",
-                          market_id, order_id)
+            if not matched:
+                raise
+            log.exception("DB write failed after engine match (market %s); resyncing engine", market_id)
             eng.restart()
             raise TradingError("Internal error: order not placed")
+
+        if fills:
+            for fn in fill_listeners:
+                try:
+                    fn(market_id, fills)
+                except Exception:
+                    log.exception("fill listener failed")
 
     # 6. result
     order = _order_json(order_fields) if order_fields and resting > 0 else None
     return {"order": order, "fills": [{"price": f["price"], "qty": f["qty"]} for f in fills]}
 
 
-def cancel_order(user_id, order_id, is_admin=False):
+def cancel_order(user_id, order_id, is_admin=False, *, _order=None, _conn=None):
+    """_order / _conn are internal: an open-order row the caller just read under the lock,
+    and the caller's transaction."""
     eng = _engine()
-    with eng.lock:
-        o = db.get_order(order_id)
+    with eng.lock, _session(_conn) as conn:
+        o = _order or db.get_order(order_id, conn=conn)
         if o is None:
             raise TradingError("Order not found")
         if o["user_id"] != user_id and not is_admin:
@@ -237,53 +300,56 @@ def cancel_order(user_id, order_id, is_admin=False):
         except EngineError as e:
             if e.reason != "unknown_market":
                 raise TradingError(f"Engine error: {e.reason}")
-        db.update_order(order_id, o["qty_remaining"], "cancelled")
+        db.update_order(order_id, o["qty_remaining"], "cancelled", conn=conn)
 
 
 # ------------------------------------------------------- close / resolve
-def _cancel_all(market_id):
+def _cancel_all(market_id, conn):
     eng = _engine()
-    for o in db.open_orders(market_id=market_id):
-        try:
-            eng.cancel(market_id, o["id"])
-        except EngineError:
-            pass
-        db.update_order(o["id"], o["qty_remaining"], "cancelled")
+    orders = db.open_orders(market_id=market_id, conn=conn)
+    with _batch(conn):
+        for o in orders:
+            try:
+                eng.cancel(market_id, o["id"])
+            except EngineError:
+                pass
+            db.update_order(o["id"], o["qty_remaining"], "cancelled", conn=conn)
 
 
-def close_market(market_id):
-    eng = _engine()
-    with eng.lock:
-        m = db.get_market(market_id)
+def close_market(market_id, conn=None):
+    with _engine().lock, _session(conn) as c:
+        m = db.get_market(market_id, conn=c)
         if m is None:
             raise TradingError("Market not found")
-        _cancel_all(market_id)
+        _cancel_all(market_id, c)
         if m["status"] in ("open", "proposed"):
-            db.update_market(market_id, status="closed")
+            db.update_market(market_id, status="closed", conn=c)
 
 
-def close_race(race_id):
-    race = db.get_race(race_id)
-    if race is None:
-        raise TradingError("Race not found")
-    with _engine().lock:
-        for m in db.race_markets(race_id):
-            close_market(m["id"])
+def close_race(race_id, conn=None):
+    with _engine().lock, _session(conn) as c:
+        race = db.get_race(race_id, conn=c)
+        if race is None:
+            raise TradingError("Race not found")
+        for m in db.race_markets(race_id, conn=c):
+            close_market(m["id"], conn=c)
         if race["status"] in ("open", "proposed"):
-            db.update_race(race_id, status="closed")
+            db.update_race(race_id, status="closed", conn=c)
 
 
 def _settle(market_id, outcome, conn):
     paid = 0
-    for p in db.market_positions(market_id, conn=conn):
-        q = int(p["qty"])
-        if q == 0:
-            continue
-        if outcome == "YES":
-            db.adjust_cash(p["user_id"], 100 * q, conn=conn)
-            paid += 100 * q
-        db.add_position(p["user_id"], market_id, -q, 0, conn=conn)
-    db.update_market(market_id, status="resolved", outcome=outcome, resolved_at=_now(), conn=conn)
+    positions = db.market_positions(market_id, conn=conn)
+    with _batch(conn):
+        for p in positions:
+            q = int(p["qty"])
+            if q == 0:
+                continue
+            if outcome == "YES":
+                db.adjust_cash(p["user_id"], 100 * q, conn=conn)
+                paid += 100 * q
+            db.add_position(p["user_id"], market_id, -q, 0, conn=conn)
+        db.update_market(market_id, status="resolved", outcome=outcome, resolved_at=_now(), conn=conn)
     log.info("market %s resolved %s, net paid %d", market_id, outcome, paid)
 
 
@@ -291,15 +357,14 @@ def resolve_market(market_id, outcome):
     outcome = (outcome or "").upper()
     if outcome not in OUTCOMES:
         raise TradingError("outcome must be YES or NO")
-    m = db.get_market(market_id)
-    if m is None:
-        raise TradingError("Market not found")
-    if m["status"] not in ("open", "closed"):
-        raise TradingError(f"Market is {m['status']}")
-    with _engine().lock:
-        close_market(market_id)
-        with db.transaction() as conn:
-            _settle(market_id, outcome, conn)
+    with _engine().lock, db.transaction() as conn:
+        m = db.get_market(market_id, conn=conn)
+        if m is None:
+            raise TradingError("Market not found")
+        if m["status"] not in ("open", "closed"):
+            raise TradingError(f"Market is {m['status']}")
+        close_market(market_id, conn=conn)
+        _settle(market_id, outcome, conn)
 
 
 def _is_ron(market):
@@ -307,34 +372,34 @@ def _is_ron(market):
 
 
 def resolve_race(race_id, winner_market_ids):
-    race = db.get_race(race_id)
-    if race is None:
-        raise TradingError("Race not found")
-    if race["status"] not in ("open", "closed"):
-        raise TradingError(f"Race is {race['status']}")
-    markets = db.race_markets(race_id)
-    by_id = {m["id"]: m for m in markets}
     try:
         winners = [int(w) for w in winner_market_ids]
     except (TypeError, ValueError):
         raise TradingError("winner_market_ids must be a list of market ids")
-    if len(set(winners)) != len(winners):
-        raise TradingError("Duplicate winners")
-    for w in winners:
-        if w not in by_id:
-            raise TradingError(f"Market {w} is not in this race")
-    ron_only = len(winners) == 1 and _is_ron(by_id[winners[0]])
-    if len(winners) != int(race["seats"]) and not ron_only:
-        raise TradingError(f"Need exactly {race['seats']} winner(s), got {len(winners)}")
+    # all in ONE transaction: a failure leaves nothing half-closed or half-paid
+    with _engine().lock, db.transaction() as conn:
+        race = db.get_race(race_id, conn=conn)
+        if race is None:
+            raise TradingError("Race not found")
+        if race["status"] not in ("open", "closed"):
+            raise TradingError(f"Race is {race['status']}")
+        markets = db.race_markets(race_id, conn=conn)
+        by_id = {m["id"]: m for m in markets}
+        if len(set(winners)) != len(winners):
+            raise TradingError("Duplicate winners")
+        for w in winners:
+            if w not in by_id:
+                raise TradingError(f"Market {w} is not in this race")
+        ron_only = len(winners) == 1 and _is_ron(by_id[winners[0]])
+        if len(winners) != int(race["seats"]) and not ron_only:
+            raise TradingError(f"Need exactly {race['seats']} winner(s), got {len(winners)}")
 
-    with _engine().lock:
-        close_race(race_id)
-        with db.transaction() as conn:
-            for m in markets:
-                if m["status"] == "resolved":
-                    continue
-                _settle(m["id"], "YES" if m["id"] in winners else "NO", conn)
-            db.update_race(race_id, status="resolved", resolved_at=_now(), conn=conn)
+        close_race(race_id, conn=conn)
+        for m in markets:
+            if m["status"] == "resolved":
+                continue
+            _settle(m["id"], "YES" if m["id"] in winners else "NO", conn)
+        db.update_race(race_id, status="resolved", resolved_at=_now(), conn=conn)
 
 
 # ------------------------------------------- market creation (for B seed + C admin)
@@ -348,42 +413,66 @@ def _parse_time(v):
     return v
 
 
+_MATCH = re.compile(r"^(?P<comp>.+?):\s*(?P<home>.+?)\s+vs\.?\s+(?P<away>.+)$", re.IGNORECASE)
+
+
+def parse_match(position):
+    """'<Competition>: <Home> vs <Away>' -> (comp, home, away), else None (COLLAB 14, Cuppers)."""
+    m = _MATCH.match((position or "").strip())
+    return (m["comp"].strip(), m["home"].strip(), m["away"].strip()) if m else None
+
+
 def question_for(candidate, position, election):
+    match = parse_match(position)
+    if match:
+        comp, home, away = match
+        if candidate.lower() == "draw":
+            return f"Will {home} vs {away} end in a draw ({comp}, {election})?"
+        if candidate.lower() == home.lower():
+            return f"Will {home} beat {away} ({comp}, {election})?"
+        if candidate.lower() == away.lower():
+            return f"Will {away} beat {home} ({comp}, {election})?"
+        return f"Will {candidate} win {position} ({election})?"
     return f"Will {candidate} be elected {position} ({election})?"
 
 
-def add_candidate(race_id, name, prior=None, **extra):
-    """Create one candidate market in a race (opened in the engine if the race is open).
-    Returns the market id. Raises TradingError if the race is missing or the name is taken."""
-    race = db.get_race(race_id)
-    if race is None:
-        raise TradingError("Race not found")
-    name = (name or "").strip()
-    if not name:
-        raise TradingError("Candidate name required")
-    if any(m["candidate"].lower() == name.lower() for m in db.race_markets(race_id)):
-        raise TradingError(f"{name} is already a candidate")
-    if prior is not None:
-        prior = max(1, min(99, int(prior)))
-    fields = {"race_id": race_id, "candidate": name,
-              "question": question_for(name, race["position"], race["election"]),
-              "resolution_criteria": race["resolution_criteria"], "category": "union",
-              "closes_at": race["closes_at"], "status": race["status"], "ai_prior": prior,
-              "source_name": race.get("source_name"), "source_url": race.get("source_url"),
-              "article_id": race.get("article_id")}
-    fields.update(extra)
-    market_id = db.create_market(fields)
-    if fields["status"] == "open":
+def add_candidate(race_id, name, prior=None, conn=None, **extra):
+    """Create one candidate market in a race (opened in the engine if the race is open and
+    no caller transaction is given). Returns the market id. Raises TradingError if the race
+    is missing or the name is taken."""
+    with _session(conn) as c:
+        race = db.get_race(race_id, conn=c)
+        if race is None:
+            raise TradingError("Race not found")
+        name = (name or "").strip()
+        if not name:
+            raise TradingError("Candidate name required")
+        if any(m["candidate"].lower() == name.lower() for m in db.race_markets(race_id, conn=c)):
+            raise TradingError(f"{name} is already a candidate")
+        if prior is not None:
+            prior = max(1, min(99, int(prior)))
+        fields = {"race_id": race_id, "candidate": name,
+                  "question": question_for(name, race["position"], race["election"]),
+                  "resolution_criteria": race["resolution_criteria"],
+                  "category": "cuppers" if parse_match(race["position"]) else "union",
+                  "closes_at": race["closes_at"], "status": race["status"], "ai_prior": prior,
+                  "source_name": race.get("source_name"), "source_url": race.get("source_url"),
+                  "article_id": race.get("article_id")}
+        fields.update(extra)
+        market_id = db.create_market(fields, conn=c)
+    if fields["status"] == "open" and conn is None:
         open_market(market_id)
     return market_id
 
 
 def create_race(election, position, closes_at, resolution_criteria, candidates, seats=1,
-                status="open", add_ron=True, **extra):
-    """One call to make a whole race: the race row, one market per candidate, RON, and
-    (if status == 'open') the engine books. candidates = [{"name", "prior"}] or [names].
-    extra = any other races column (description, source_name, source_url, article_id,
-    ai_reason, created_by_ai). Returns the race id."""
+                status="open", add_ron=False, **extra):
+    """One call to make a whole race in ONE transaction: the race row, one market per
+    candidate (question text + category derived from the position), and (if status ==
+    'open') the engine books. candidates = [{"name", "prior"}] or [names].
+    Cuppers (COLLAB 14): position "<Competition>: <Home> vs <Away>", candidates Home /
+    Draw / Away, no RON. add_ron=True restores the old Union-election behaviour.
+    extra = any other races column (description, source_name, ...). Returns the race id."""
     if status not in ("proposed", "open"):
         raise TradingError("status must be proposed or open")
     if not candidates:
@@ -391,19 +480,25 @@ def create_race(election, position, closes_at, resolution_criteria, candidates, 
     seats = int(seats)
     if seats < 1:
         raise TradingError("seats must be >= 1")
-    existing = db.find_race(election, position)
-    if existing:
-        raise TradingError(f"Race already exists (id {existing['id']})")
     cands = [c if isinstance(c, dict) else {"name": c} for c in candidates]
-    if add_ron and not any(c["name"].strip().upper().startswith("RON") for c in cands):
+    names = [c["name"].strip().lower() for c in cands]
+    if len(set(names)) != len(names):
+        raise TradingError("Duplicate candidate names")
+    if add_ron and not any(n.upper().startswith("RON") for n in names):
         cands.append({"name": RON_NAME, "prior": RON_PRIOR})
     fields = {"election": election, "position": position, "seats": seats,
               "closes_at": _parse_time(closes_at), "resolution_criteria": resolution_criteria,
               "status": status}
     fields.update(extra)
-    race_id = db.create_race(fields)
-    for c in cands:
-        add_candidate(race_id, c["name"], c.get("prior"))
+    with db.transaction() as conn:
+        existing = db.find_race(election, position, conn=conn)
+        if existing:
+            raise TradingError(f"Race already exists (id {existing['id']})")
+        race_id = db.create_race(fields, conn=conn)
+        market_ids = [add_candidate(race_id, c["name"], c.get("prior"), conn=conn) for c in cands]
+    if status == "open":
+        for mid in market_ids:   # after commit, so a rolled-back race never has books
+            open_market(mid)
     log.info("race %s created: %s %s, %d candidates, status %s",
              race_id, election, position, len(cands), status)
     return race_id

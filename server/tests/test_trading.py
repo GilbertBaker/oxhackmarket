@@ -11,13 +11,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_trading_fakes import FakeDB  # noqa: E402
 
 # trading/mm_bot/trading_api do `import db`; point that at a proxy we can swap per test
-db_proxy = types.ModuleType("db")
-sys.modules["db"] = db_proxy
+db_proxy = types.ModuleType("db_fake_proxy")
+sys.modules.setdefault("db", db_proxy)
 
 import engine  # noqa: E402
 import mm_bot  # noqa: E402
 import risk  # noqa: E402
 import trading  # noqa: E402
+import trading_api  # noqa: E402
+
+# If another test module imported the real db first, these modules are bound to it.
+# Point them at the proxy explicitly so trading tests can never touch Timescale.
+for _m in (trading, mm_bot, trading_api):
+    _m.db = db_proxy
 
 EXE = engine._resolve_path(None)
 BACKENDS = ["py"] + (["cpp"] if os.path.exists(EXE) else [])
@@ -31,6 +37,7 @@ def env(request):
             setattr(db_proxy, name, getattr(fake, name))
     eng = engine.Engine(path=EXE if request.param == "cpp" else os.path.join(SERVER, "no_such.exe"))
     engine._engine = eng
+    mm_bot.reset_state()
     trading.startup()
     yield fake, eng
     eng.stop()

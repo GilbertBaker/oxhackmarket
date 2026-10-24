@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaderboard · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap">
+  <div class="eyebrow">Leaderboard</div>
+  <h1>Who's calling Cuppers best</h1>
+  <p class="muted" style="margin-top:6px">Everyone starts with £1,000 of play money. Equity is cash plus open positions at today's prices.</p>
+
+  <div class="grid-2" style="margin-top:20px;align-items:start">
+    <section class="card card-pad">
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Rank</th><th>Trader</th><th class="right">Equity</th><th class="right">Profit / loss</th></tr></thead>
+          <tbody id="leaders"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card card-pad">
+      <h2>Hindsight</h2>
+      <p class="tiny faint">Equity of the current top five over the last week.</p>
+      <div class="chart-box" style="height:300px"><canvas id="lb-chart" role="img" aria-label="Top five traders' equity over time"></canvas></div>
+    </section>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/leaderboard.js"></script>
+</body>
+</html>

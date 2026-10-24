@@ -1,4 +1,61 @@
-<!-- STUB created by B. Owner C replaces this file wholesale. -->
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>OxMarket</title></head>
-<body><h1>OxMarket</h1><p>Frontend coming soon.</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OxMarket · Cuppers prediction market</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <div class="eyebrow">College sport prediction market</div>
+      <h1 id="hero-title">Michaelmas 2026 Cuppers</h1>
+      <p class="muted" id="hero-sub">Trade on every Cuppers match this term. Prices are probabilities: 62p means a 62% chance.</p>
+    </div>
+    <div>
+      <div class="countdown-units" id="hero-countdown"></div>
+      <div class="cd-next" id="hero-next"></div>
+    </div>
+  </section>
+
+  <section class="digest" id="digest" hidden aria-live="polite"></section>
+
+  <div class="toolbar">
+    <div class="seg" id="status-tabs" role="group" aria-label="Match status">
+      <button type="button" data-status="open" aria-pressed="true">Upcoming<span class="count" id="count-open"></span></button>
+      <button type="button" data-status="closed" aria-pressed="false">Awaiting result<span class="count" id="count-closed"></span></button>
+      <button type="button" data-status="resolved" aria-pressed="false">Results<span class="count" id="count-resolved"></span></button>
+    </div>
+    <div class="pills" id="sport-pills" role="group" aria-label="Filter by sport"></div>
+    <div class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <label for="search" class="sr-only">Search matches</label>
+      <input id="search" class="input" type="search" placeholder="Search colleges or competitions" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="layout">
+    <div id="fixtures" aria-live="polite"><div class="empty card">Loading matches…</div></div>
+    <aside class="col-side">
+      <section class="card card-pad">
+        <h2>Biggest movers</h2>
+        <p class="tiny faint">Change in the last 24 hours</p>
+        <ul class="headlines" id="movers"><li class="muted small">Loading…</li></ul>
+      </section>
+      <section class="card card-pad" id="headlines-card" hidden>
+        <h2>Latest Cuppers news</h2>
+        <ul class="headlines" id="headlines"></ul>
+      </section>
+    </aside>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/index.js"></script>
+</body>
+</html>

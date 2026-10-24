@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap" id="admin-root">
+  <div class="row">
+    <div>
+      <div class="eyebrow">Admin</div>
+      <h1>Matches &amp; results</h1>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn btn-ghost btn-sm" id="reload" type="button">Reload</button>
+  </div>
+  <div id="admin-msg" aria-live="polite"></div>
+
+  <div class="section-title"><h2>Awaiting result</h2><span class="count" id="count-results"></span></div>
+  <p class="small muted" style="margin-top:-6px">Matches that have kicked off. Pick what happened and post it: the market settles and pays out straight away.</p>
+  <div id="results"></div>
+
+  <div class="layout" style="margin-top:8px">
+    <div>
+      <div class="section-title"><h2>Upcoming matches</h2><span class="count" id="count-upcoming"></span></div>
+      <div id="upcoming"></div>
+      <div class="section-title"><h2>Recent results</h2></div>
+      <div id="recent"></div>
+    </div>
+    <aside>
+      <div class="section-title"><h2>Post a match</h2></div>
+      <form class="card admin-card" id="new-match" novalidate>
+        <div class="field-grid">
+          <div>
+            <label for="nm-term">Term</label>
+            <input class="input" id="nm-term" value="Michaelmas 2026" required>
+          </div>
+          <div>
+            <label for="nm-round">Round <span class="faint">(optional)</span></label>
+            <input class="input" id="nm-round" placeholder="Group A, Quarter-final…">
+          </div>
+        </div>
+        <label for="nm-comp">Competition</label>
+        <input class="input" id="nm-comp" list="comp-list" placeholder="Men's Football Cuppers" required>
+        <datalist id="comp-list"></datalist>
+        <div class="field-grid">
+          <div>
+            <label for="nm-home">Home team</label>
+            <input class="input" id="nm-home" placeholder="Keble" required>
+          </div>
+          <div>
+            <label for="nm-away">Away team</label>
+            <input class="input" id="nm-away" placeholder="Worcester" required>
+          </div>
+        </div>
+        <label for="nm-kick">Kick-off <span class="faint">(trading stops then)</span></label>
+        <input class="input" id="nm-kick" type="datetime-local" required>
+        <label class="row" style="color:var(--text);font-weight:550;margin-top:14px;cursor:pointer">
+          <input type="checkbox" id="nm-draw" checked style="width:18px;height:18px;accent-color:var(--accent)"> A draw is a possible result
+        </label>
+        <div class="label">Opening odds (%)</div>
+        <div class="field-grid" id="nm-priors" style="grid-template-columns:repeat(auto-fit,minmax(80px,1fr))"></div>
+        <p class="tiny faint" id="nm-prior-sum" style="margin-top:6px"></p>
+        <label for="nm-criteria">Resolution rules</label>
+        <textarea class="input" id="nm-criteria" rows="3"></textarea>
+        <div id="nm-msg" aria-live="polite"></div>
+        <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px">Post match</button>
+      </form>
+    </aside>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>
