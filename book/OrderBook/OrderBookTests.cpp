@@ -225,6 +225,78 @@ void testAccountingConservation() {
 }
 
 
+void testFillsRecorded() {
+    Fixture f;
+
+    f.book.placeSellOrder(new Order(50, 10, 0, 1, 101, false));
+    f.book.placeSellOrder(new Order(51, 10, 0, 2, 102, false));
+
+    f.book.fills.clear();
+    f.book.placeBuyOrder(new Order(55, 15, 0, 3, 103, true));
+
+    assert(f.book.fills.size() == 2);
+    assert(f.book.fills[0].makerOrderID == 101);
+    assert(f.book.fills[0].makerTraderID == 1);
+    assert(f.book.fills[0].takerTraderID == 3);
+    assert(f.book.fills[0].price == 50);
+    assert(f.book.fills[0].qty == 10);
+    assert(f.book.fills[0].takerIsBuy);
+    assert(f.book.fills[1].makerOrderID == 102);
+    assert(f.book.fills[1].price == 51);
+    assert(f.book.fills[1].qty == 5);
+    assert(f.book.getRestingQty(102) == 5);
+    assert(f.book.getRestingQty(103) == 0);
+
+    f.book.fills.clear();
+    f.book.placeBuyInstantOrder(3, 4);
+    assert(f.book.fills.size() == 1);
+    assert(f.book.fills[0].makerOrderID == 102);
+    assert(f.book.fills[0].qty == 3);
+    assert(f.book.getRestingQty(102) == 2);
+}
+
+void testUnknownTrader() {
+    OrderBook book;
+    TraderAlgo algo(&book, 0);
+    book.algo = &algo;
+
+    book.placeBuyOrder(new Order(40, 5, 0, 5000, 1, true));
+    book.placeSellOrder(new Order(40, 5, 0, 6000, 2, false));
+
+    assert(book.fills.size() == 1);
+    assert(book.fills[0].makerTraderID == 5000);
+    assert(book.fills[0].takerTraderID == 6000);
+    assert(!book.fills[0].takerIsBuy);
+}
+
+void testDepth() {
+    Fixture f;
+
+    f.book.placeBuyOrder(new Order(40, 5, 0, 1, 1, true));
+    f.book.placeBuyOrder(new Order(42, 5, 0, 1, 2, true));
+    f.book.placeBuyOrder(new Order(42, 7, 0, 2, 3, true));
+    f.book.placeBuyOrder(new Order(38, 1, 0, 2, 4, true));
+    f.book.placeSellOrder(new Order(60, 3, 0, 1, 5, false));
+    f.book.placeSellOrder(new Order(55, 4, 0, 1, 6, false));
+
+    auto bids = f.book.getDepth(true, 2);
+    assert(bids.size() == 2);
+    assert(bids[0] == std::make_pair(42, 12));
+    assert(bids[1] == std::make_pair(40, 5));
+
+    auto asks = f.book.getDepth(false, 10);
+    assert(asks.size() == 2);
+    assert(asks[0] == std::make_pair(55, 4));
+    assert(asks[1] == std::make_pair(60, 3));
+
+    //cancelling the only order at a level removes the level
+    f.book.cancelOrder(6);
+    asks = f.book.getDepth(false, 10);
+    assert(asks.size() == 1);
+    assert(asks[0] == std::make_pair(60, 3));
+}
+
+
 int main() {
     testBestPrices();
     testPricePriority();
@@ -234,6 +306,9 @@ int main() {
     testCancelHeadMiddleTail();
     testInvalidCancellation();
     testAccountingConservation();
+    testFillsRecorded();
+    testUnknownTrader();
+    testDepth();
 
     std::cout << "All tests passed.\n";
 

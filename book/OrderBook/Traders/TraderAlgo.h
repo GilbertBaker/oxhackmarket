@@ -14,7 +14,7 @@ class OrderBook;
 
 class TraderAlgo {
     public:
-    TraderAlgo(OrderBook* ordBook);
+    TraderAlgo(OrderBook* ordBook, int noOfTraders = 100);
     void Update();
     Trader* getTrader(int id);
     std::unordered_map<int, Trader*> traders;

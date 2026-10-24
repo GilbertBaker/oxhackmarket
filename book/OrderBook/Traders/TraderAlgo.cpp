@@ -11,12 +11,9 @@
 
 
 
-TraderAlgo::TraderAlgo(OrderBook* ordBook) : orderBook(ordBook), rng(std::random_device{}()) {
+TraderAlgo::TraderAlgo(OrderBook* ordBook, int noOfTraders) : orderBook(ordBook), rng(std::random_device{}()), noOfTraders(noOfTraders) {
     currentTradeID =0;
     curID=0;
-    //for now:
-    noOfTraders=100;
-
     //TODO: do something about 0, it needs to be set to something that isnt null but isnt a trader
     for (int i=curID;i<noOfTraders;i++) {
         traders[i] = new Trader(i);
@@ -39,7 +36,15 @@ void TraderAlgo::Update() {
 }
 
 Trader* TraderAlgo::getTrader(int id) {
-    return traders[id];
+    //traders that weren't created up front (e.g. web users) are created on first use
+    auto it = traders.find(id);
+    if (it != traders.end() && it->second != nullptr) {
+        return it->second;
+    }
+    Trader* trader = new Trader(id);
+    trader->algo = this;
+    traders[id] = trader;
+    return trader;
 }
 
 int TraderAlgo::getCurrentTime() {
