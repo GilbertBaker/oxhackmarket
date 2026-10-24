@@ -1,0 +1,3 @@
+"C:\Program Files\JetBrains\CLion 2026.2.0.1\bin\cmake\win\x64\bin\cmake.exe" -E rm -f CMakeFiles\MarketServer.dir/objects.a
+C:\PROGRA~1\JETBRA~1\CLION2~1.1\bin\mingw\bin\ar.exe qc CMakeFiles\MarketServer.dir/objects.a @CMakeFiles\MarketServer.dir\objects1.rsp
+C:\PROGRA~1\JETBRA~1\CLION2~1.1\bin\mingw\bin\C__~1.EXE -g -static-libgcc -static-libstdc++ -Wl,--whole-archive CMakeFiles\MarketServer.dir/objects.a -Wl,--no-whole-archive -o MarketServer.exe -Wl,--out-implib,libMarketServer.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\MarketServer.dir\linkLibs.rsp
