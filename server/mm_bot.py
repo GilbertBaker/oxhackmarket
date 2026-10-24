@@ -14,6 +14,7 @@ SIZE = 50
 HALF_SPREAD = 2
 ALPHA = 0.3
 PRIOR_PULL = 0.1
+YIELD = 0.01   # seconds between requoted markets
 
 _thread = None
 
@@ -51,28 +52,47 @@ def quotes(fair, house_position):
     return bid, ask
 
 
-def requote_market(house_id, market_id, fair):
-    """Returns True if the quotes were replaced, False if the current ones were kept."""
-    with trading._engine().lock:
+def _target(bid, ask):
+    return [("buy", bid, SIZE), ("sell", ask, SIZE)]
+
+
+def _current(orders):
+    return sorted((o["side"], o["price"], o["qty_remaining"]) for o in orders)
+
+
+def requote_market(house_id, market, fair, mine=None, pos=None):
+    """Returns True if the quotes were replaced, False if the current ones were kept.
+    mine/pos = the house's open orders / position here, read once per pass by requote_all.
+    They may be slightly stale; they're only used to decide whether to requote. The engine
+    lock is taken only when something changes, and the orders are re-read under it."""
+    market_id = market["id"]
+    if pos is None:
         pos = db.get_position(house_id, market_id)["qty"]
-        bid, ask = quotes(fair, pos)
+    if mine is None:
         mine = db.open_orders(market_id=market_id, user_id=house_id)
-        current = sorted((o["side"], o["price"], o["qty_remaining"]) for o in mine)
-        if current == [("buy", bid, SIZE), ("sell", ask, SIZE)]:
-            return False   # already quoting exactly this: no DB writes, lock released quickly
+    bid, ask = quotes(fair, pos)
+    if _current(mine) == _target(bid, ask):
+        return False   # already quoting exactly this: no lock, no DB writes
+    with trading._engine().lock:
+        mine = db.open_orders(market_id=market_id, user_id=house_id)   # fresh, under the lock
         for o in mine:
             try:
-                trading.cancel_order(house_id, o["id"], is_admin=True)
+                trading.cancel_order(house_id, o["id"], is_admin=True, _order=o)
             except trading.TradingError:
                 pass
-        trading.place_order(house_id, market_id, "YES", "buy", "limit", bid, SIZE)
-        trading.place_order(house_id, market_id, "YES", "sell", "limit", ask, SIZE)
-        return True
+        trading.place_order(house_id, market_id, "YES", "buy", "limit", bid, SIZE, _trusted_market=market)
+        trading.place_order(house_id, market_id, "YES", "sell", "limit", ask, SIZE, _trusted_market=market)
+    time.sleep(YIELD)   # Python locks aren't fair: let waiting user orders in before the next market
+    return True
 
 
 def requote_all():
     """One pass over every open race. Returns the number of markets requoted."""
     house_id = db.ensure_bot_user()
+    by_market = {}
+    for o in db.open_orders(user_id=house_id):
+        by_market.setdefault(o["market_id"], []).append(o)
+    positions = {p["market_id"]: int(p["qty"]) for p in db.user_positions(house_id)}
     changed = 0
     for race in db.list_races(status="open"):
         try:
@@ -85,7 +105,8 @@ def requote_all():
             continue
         for m in markets:
             try:
-                changed += requote_market(house_id, m["id"], fairs[m["id"]])
+                changed += requote_market(house_id, m, fairs[m["id"]],
+                                          by_market.get(m["id"], []), positions.get(m["id"], 0))
             except Exception:
                 log.exception("requote failed for market %s", m["id"])
     return changed

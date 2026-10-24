@@ -114,7 +114,9 @@ def _order_json(fields):
         "created_at": fields.get("created_at") or _now()}
 
 
-def place_order(user_id, market_id, outcome, side, type, price, qty):
+def place_order(user_id, market_id, outcome, side, type, price, qty, *, _trusted_market=None):
+    """_trusted_market is internal (mm_bot only): the caller already holds the open
+    market row, and the house account skips the risk check (its cash covers any quote)."""
     # 1. validate
     outcome = (outcome or "").upper()
     if outcome not in OUTCOMES:
@@ -138,7 +140,7 @@ def place_order(user_id, market_id, outcome, side, type, price, qty):
             raise TradingError("price must be between 1 and 99")
     else:
         price = None
-    market = db.get_market(market_id)
+    market = _trusted_market or db.get_market(market_id)
     if market is None:
         raise TradingError("Market not found")
     if market["status"] != "open":
@@ -153,13 +155,16 @@ def place_order(user_id, market_id, outcome, side, type, price, qty):
         eng.new_market(market_id)
 
         # 3. risk
-        user, positions, orders = _risk_inputs(user_id)
-        if type == "limit":
+        if _trusted_market is not None and type == "limit":
+            pass
+        elif type == "limit":
+            user, positions, orders = _risk_inputs(user_id)
             try:
                 risk.check_order(user["cash"], positions, orders, market_id, yside, yprice, qty)
             except risk.RiskError as e:
                 raise TradingError(str(e))
         else:
+            user, positions, orders = _risk_inputs(user_id)
             book = eng.book(market_id, 1000)
             levels = book["asks"] if yside == "buy" else book["bids"]
             affordable, fillable = risk.max_affordable_market_qty(
@@ -175,31 +180,48 @@ def place_order(user_id, market_id, outcome, side, type, price, qty):
         if type == "limit":
             order_id = db.next_order_id()
             fills, resting = eng.limit(market_id, order_id, user_id, yside, yprice, qty)
+            _unfilled = 0
         else:
             fills, _unfilled = eng.market(market_id, user_id, yside, qty)
             resting = 0
 
         # 5. persist
         order_fields = None
+        # Price-time sweep: every maker except the last one touched is fully filled, and so is
+        # the last one if the taker has qty left over. Only that last maker needs a DB read.
+        leftover = resting if type == "limit" else _unfilled
         try:
             with db.transaction() as conn:
-                for f in fills:
+                cash_d, pos_d = {}, {}
+                for i, f in enumerate(fills):
                     p, q = f["price"], f["qty"]
                     if yside == "buy":
                         buyer, seller = user_id, f["maker_trader_id"]
                     else:
                         buyer, seller = f["maker_trader_id"], user_id
-                    db.adjust_cash(buyer, -p * q, conn=conn)
-                    db.adjust_cash(seller, p * q, conn=conn)
-                    db.add_position(buyer, market_id, q, p * q, conn=conn)
-                    db.add_position(seller, market_id, -q, -p * q, conn=conn)
-                    maker = db.get_order(f["maker_order_id"])
-                    left = (maker["qty_remaining"] if maker else q) - q
+                    cash_d[buyer] = cash_d.get(buyer, 0) - p * q
+                    cash_d[seller] = cash_d.get(seller, 0) + p * q
+                    pq, pc = pos_d.get(buyer, (0, 0))
+                    pos_d[buyer] = (pq + q, pc + p * q)
+                    pq, pc = pos_d.get(seller, (0, 0))
+                    pos_d[seller] = (pq - q, pc - p * q)
+                    if i < len(fills) - 1 or leftover > 0:
+                        left = 0
+                    else:
+                        maker = db.get_order(f["maker_order_id"])
+                        left = (maker["qty_remaining"] if maker else q) - q
                     db.update_order(f["maker_order_id"], left, "filled" if left <= 0 else "open", conn=conn)
                     db.insert_trade({"market_id": market_id, "price": p, "qty": q,
                                      "buyer_id": buyer, "seller_id": seller, "taker_side": yside,
                                      "maker_order_id": f["maker_order_id"], "taker_order_id": order_id},
                                     conn=conn)
+                # one cash + one position write per user, however many levels were swept
+                for uid, d in cash_d.items():
+                    if d:
+                        db.adjust_cash(uid, d, conn=conn)
+                for uid, (dq, dc) in pos_d.items():
+                    if dq or dc:
+                        db.add_position(uid, market_id, dq, dc, conn=conn)
                 if type == "limit":
                     order_fields = {"id": order_id, "market_id": market_id, "user_id": user_id,
                                     "side": yside, "price": yprice, "qty": qty, "qty_remaining": resting,
@@ -222,10 +244,11 @@ def place_order(user_id, market_id, outcome, side, type, price, qty):
     return {"order": order, "fills": [{"price": f["price"], "qty": f["qty"]} for f in fills]}
 
 
-def cancel_order(user_id, order_id, is_admin=False):
+def cancel_order(user_id, order_id, is_admin=False, *, _order=None):
+    """_order is internal: an open-order row the caller just read (saves a DB lookup)."""
     eng = _engine()
     with eng.lock:
-        o = db.get_order(order_id)
+        o = _order or db.get_order(order_id)
         if o is None:
             raise TradingError("Order not found")
         if o["user_id"] != user_id and not is_admin:

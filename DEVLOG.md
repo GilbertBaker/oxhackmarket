@@ -12,3 +12,10 @@
 - The MM bot skips markets where the quote it wants is already resting at full size, so a quiet 10 s pass makes no DB writes and barely holds the engine lock. This matters on cloud Timescale, where every order costs ~10 round trips.
 - server/marketctl.py is an HTTP client, not an in-process tool. The engine's books live in the server process, and a CLI with its own engine would silently diverge from them. Its `sim` command drives simulated traders (drifting beliefs + occasional "news" shocks) through the public API to create realistic price history for the TIME demo.
 - 40 tests, including marketctl end to end over a real local HTTP server (create race -> MM quotes -> market order -> 3-trader sim -> invariant check OK).
+
+## 2026-10-25 01:15 [A] Latency + concurrency hardening
+- Benchmark (test_trading_load.py, TRADING_LOAD=1): every fake DB call sleeps 30 ms to mimic cloud Timescale round trips, with 20 candidate markets.
+  Before: a user's order took 1.4 s while the MM bot was requoting, because Python locks aren't fair (the bot re-grabbed the engine lock market after market), and an idle bot pass cost 2 s of locked DB reads.
+  After: 0.46 s p50 (0.7 s max) for user orders under bot load, an idle pass takes 0.9 s and never takes the lock, and total DB calls fell 959 -> 531.
+- How: the bot reads the house's orders and positions once per pass, decides off-lock, locks only for markets that changed (re-reading under the lock so it never cancels from stale data), and sleeps 10 ms between markets. place_order only reads the last maker order a sweep touched (every earlier maker is fully filled by definition) and makes one cash/position write per user instead of per fill. The house bot skips the redundant market re-read and the risk check (its cash covers any quote).
+- Stress test (always on): 8 HTTP clients firing limit/market orders and cancels at a threaded server while the MM loop runs, for both engines. Result: about 700 requests and 363 trades across the two runs, zero 5xx, total cash conserved exactly, check_invariants() clean.
