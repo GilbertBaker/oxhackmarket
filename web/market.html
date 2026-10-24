@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap" id="market-root">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Matches</a><span aria-hidden="true">›</span><a id="crumb-race" href="#">…</a><span aria-hidden="true">›</span><span id="crumb-out">…</span></nav>
+  <section class="page-head">
+    <span class="rc-icon lg" id="m-icon" aria-hidden="true">🏆</span>
+    <div class="titles">
+      <h1 id="m-title">Loading…</h1>
+      <div class="meta" id="m-sub"></div>
+    </div>
+    <div class="closes-box" id="closes-box"></div>
+  </section>
+
+  <div class="layout ticket-first" style="margin-top:20px">
+    <div class="col-main">
+      <section class="card card-pad">
+        <div class="card-head">
+          <div class="price-line"><span class="big-pct num" id="m-pct">–</span><span class="muted">chance</span><span id="m-chg"></span></div>
+          <div class="seg" id="bucket" role="group" aria-label="Chart resolution">
+            <button type="button" data-bucket="1m" aria-pressed="false">1m</button>
+            <button type="button" data-bucket="5m" aria-pressed="true">5m</button>
+            <button type="button" data-bucket="1h" aria-pressed="false">1h</button>
+          </div>
+        </div>
+        <p class="small muted" id="m-yesno" style="margin-top:-6px"></p>
+        <div class="chart-box"><canvas id="m-chart" role="img" aria-label="Chance over time"></canvas></div>
+        <p class="empty" id="chart-empty" hidden>No trading history yet.</p>
+      </section>
+      <div class="grid-2">
+        <section class="card card-pad">
+          <h2 style="margin-bottom:4px">Order book</h2>
+          <p class="tiny faint">Prices in YES terms; the NO equivalent is greyed. Click a level to fill the ticket.</p>
+          <table class="ladder" id="ladder"></table>
+        </section>
+        <section class="card card-pad">
+          <h2 style="margin-bottom:8px">Recent trades</h2>
+          <div class="tape" id="tape"></div>
+        </section>
+      </div>
+      <section class="card card-pad">
+        <h2 style="margin-bottom:8px">Your open orders here</h2>
+        <div id="my-orders"></div>
+      </section>
+      <section class="card card-pad">
+        <h2 style="margin-bottom:8px">Rules</h2>
+        <p class="small muted" id="criteria"></p>
+      </section>
+    </div>
+
+    <aside class="col-side sticky">
+      <section class="card ticket">
+        <form id="ticket" novalidate>
+          <div class="ticket-name" id="t-name">…</div>
+          <div class="outcome-toggle" role="group" aria-label="Choose a side">
+            <button type="button" class="oc-btn yes" data-outcome="YES" aria-pressed="true"><span>Buy Yes</span><b class="num" id="t-yes-px">–</b></button>
+            <button type="button" class="oc-btn no" data-outcome="NO" aria-pressed="false"><span>Buy No</span><b class="num" id="t-no-px">–</b></button>
+          </div>
+          <p class="t-explain" id="t-explain"></p>
+          <div class="seg" id="t-type" role="group" aria-label="Order type" style="margin-top:8px">
+            <button type="button" data-type="limit" aria-pressed="true">Limit</button>
+            <button type="button" data-type="market" aria-pressed="false">Market</button>
+          </div>
+          <div id="t-price-wrap">
+            <label for="t-price">Limit price, pence per share (= chance %)</label>
+            <div class="price-row">
+              <input type="range" id="t-price-range" min="1" max="99" value="50" aria-label="Limit price slider">
+              <input type="number" class="input" id="t-price" min="1" max="99" step="1" value="50" inputmode="numeric">
+            </div>
+          </div>
+          <label for="t-qty">Shares</label>
+          <input class="input" id="t-qty" type="number" min="1" step="1" value="10" inputmode="numeric">
+          <div class="qty-quick">
+            <button type="button" data-add="10">+10</button><button type="button" data-add="50">+50</button><button type="button" data-add="100">+100</button>
+          </div>
+          <div class="t-preview" id="t-preview" aria-live="polite"></div>
+          <button class="btn btn-primary btn-block btn-lg" id="t-submit" type="submit">Buy Yes</button>
+          <div id="t-msg" aria-live="polite"></div>
+          <p class="tiny faint" id="t-avail" style="margin:10px 0 0;text-align:center"></p>
+        </form>
+        <div class="ticket-closed" id="t-closed" hidden></div>
+      </section>
+      <section class="card card-pad" id="my-position" hidden></section>
+    </aside>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/market.js"></script>
+</body>
+</html>

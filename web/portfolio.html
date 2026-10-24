@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap" id="pf-root">
+  <div class="eyebrow">Portfolio</div>
+  <h1>Your positions</h1>
+  <div class="stats" id="stats"></div>
+
+  <section class="card card-pad">
+    <h2>Positions by match</h2>
+    <div id="positions"><p class="muted">Loading…</p></div>
+  </section>
+
+  <section class="card card-pad" style="margin-top:20px">
+    <h2 style="margin-bottom:8px">Open orders</h2>
+    <div id="orders"><p class="muted">Loading…</p></div>
+  </section>
+</main>
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/portfolio.js"></script>
+</body>
+</html>
