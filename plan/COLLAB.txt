@@ -669,3 +669,43 @@ Timescale features.
              - GET /api/races: sort by closes_at (kick-off) only.
              Frontend (web/**) is built against this, white background with
              dark-blue accents. Mock mode: any page with ?mock=1, or file://.
+  2026-10-25 [A] LIVE on Tiger Data + Cuppers scope. Read this, B and C:
+             - Cuppers: trading.create_race(...) now defaults add_ron=False. It derives
+               question text + category from a "<Competition>: <Home> vs <Away>" position:
+               "Will Keble beat Worcester (Men's Football Cuppers, Michaelmas 2026)?",
+               "Will Keble vs Worcester end in a draw (...)?", category 'cuppers'.
+               Extra race columns pass through (description="Round 1"). The whole race is
+               created in ONE transaction; duplicate candidate names are rejected.
+               C: POST /api/admin/races can be just
+               trading.create_race(b["election"], b["position"], b["closes_at"],
+               b["resolution_criteria"], b["candidates"], seats=1,
+               description=b.get("description")) -> data_api.race_json(db.get_race(id)).
+               Close/resolve stay POST /api/admin/races/<id>/close and /resolve
+               {"winner_market_ids":[id]} (A's, unchanged).
+             - A's admin close/resolve responses now use B's data_api.race_json (same shape
+               as GET /api/races/<id>).
+             - Latency: the DB is ~85 ms per round trip away. Every db.* call WITHOUT conn=
+               costs ~340 ms (pool checkout + check + implicit BEGIN/COMMIT). Trading now
+               does each operation on ONE connection, with psycopg pipeline() for its writes:
+               live orders went from 2.4-4 s to ~0.8 s, and resolve from 6.8 s to 2 s.
+               B and C: in any endpoint that makes several db calls, open
+               `with db.transaction() as conn:` once and pass conn= to each call.
+             - REQUEST TO B (your file, I haven't touched it): open the pool with autocommit.
+               Add "autocommit": True to the ConnectionPool kwargs in db.pool(), and drop
+               check=ConnectionPool.check_connection (or keep it only with max_idle).
+               I measured a single query at 346 ms now vs 97 ms with autocommit, about 3.5x
+               faster for EVERY endpoint. db.transaction() still works, because
+               conn.transaction() issues an explicit BEGIN in autocommit mode.
+             - REQUEST TO B: 46 leftover test races "TEST f3c691 0..45" (users
+               test_f3c691_*) are still in oxmarket, mostly status 'open'. Markets 115, 117, 192, 193
+               have one-sided positions with no trades, so check_invariants() flags them.
+               With jobs on, the MM bot would quote all of their ~130 markets. Please delete
+               them, or reset the schema (only B may).
+             - REQUEST TO B: test_db.py::test_time_series fails consistently now. It backdates
+               trades 2 h, but the candles_5m continuous aggregate has already materialised
+               that window, so back-filled rows don't appear until the next refresh. Call
+               refresh_continuous_aggregate in the test, or use recent timestamps.
+               test_equity_with_short depends on that test's prices, so it fails with it.
+             - New: server/tests/test_trading_live.py (TRADING_LIVE=1). It runs the full
+               trade -> engine crash/replay -> close -> resolve flow on the real DB with its
+               own TESTA* rows and deletes exactly those afterwards.

@@ -1,3 +1,9 @@
+STATUS UPDATE 2026-10-25 03:00 [A]: LIVE on Tiger Data (see COLLAB 14, 2026-10-25 [A]).
+  Done since the MVP: helpers (create_race etc.), marketctl CLI + sim, latency work (one conn +
+  pipelined writes, ~0.8 s orders live), Cuppers scope (no RON, match questions).
+  Waiting on: B (pool autocommit, stale TEST race cleanup, test_time_series fix),
+  C (admin create-race wrapper over trading.create_race; UI check of order flows).
+
 STATUS UPDATE 2026-10-24 23:50 [A]: MVP DONE (branch engine, merged to local main fb8cee6)
   DONE: A1-A8 (C++ changes, MarketServer.exe + protocol test, engine.py, risk.py,
         trading.py, trading_api.py, mm_bot.py, 28 pytest tests on fake db vs C++ and

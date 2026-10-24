@@ -37,6 +37,7 @@ def env(request):
             setattr(db_proxy, name, getattr(fake, name))
     eng = engine.Engine(path=EXE if request.param == "cpp" else os.path.join(SERVER, "no_such.exe"))
     engine._engine = eng
+    mm_bot.reset_state()
     trading.startup()
     yield fake, eng
     eng.stop()

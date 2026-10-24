@@ -49,9 +49,9 @@ def admin_required(f):
     return wrapper
 
 
-def user_json(user):
+def user_json(user, conn=None):
     return {"id": user["id"], "username": user["username"], "cash": user["cash"],
-            "available": trading.available_cash(user["id"]), "is_admin": bool(user.get("is_admin"))}
+            "available": trading.available_cash(user["id"], conn=conn), "is_admin": bool(user.get("is_admin"))}
 
 
 def order_json(o):
@@ -68,6 +68,14 @@ def _market_json(m):
 
 
 def race_json(race):
+    """COLLAB 9 Race. Uses B's serializer (data_api.race_json: adds change_24h, volume_24h,
+    sparkline) when it's available and bound to the same db; own minimal version otherwise."""
+    try:
+        import data_api
+        if getattr(data_api, "db", None) is db:
+            return data_api.race_json(race)
+    except ImportError:
+        pass
     markets = sorted((_market_json(m) for m in db.race_markets(race["id"])),
                      key=lambda m: m.get("price") or 0, reverse=True)
     out = {k: _iso(v) for k, v in race.items()}
@@ -105,7 +113,9 @@ def place_order(user):
     except trading.TradingError as e:
         return _err(str(e))
     order = order_json(res["order"]) if res["order"] else None
-    return jsonify({"order": order, "fills": res["fills"], "user": user_json(db.get_user(user["id"]))}), 201
+    with db.transaction() as conn:
+        fresh = user_json(db.get_user(user["id"], conn=conn), conn)
+    return jsonify({"order": order, "fills": res["fills"], "user": fresh}), 201
 
 
 @bp.delete("/api/orders/<int:order_id>")
@@ -133,21 +143,27 @@ def list_orders(user):
 @bp.get("/api/portfolio")
 @login_required
 def portfolio(user):
-    positions = []
-    for p in db.user_positions(user["id"]):
-        qty = int(p["qty"])
-        if qty == 0:
-            continue
-        m = db.get_market(p["market_id"]) or {}
-        race = db.get_race(m["race_id"]) if m.get("race_id") else None
-        price = db.current_price(p["market_id"])
-        positions.append({
-            "market_id": p["market_id"], "question": m.get("question"), "status": m.get("status"),
-            "race_id": m.get("race_id"), "candidate": m.get("candidate"),
-            "position": race["position"] if race else None,
-            "qty": qty, "label": "YES" if qty > 0 else "NO", "shares": abs(qty),
-            "price": price, "value": qty * price, "net_cost": int(p.get("net_cost") or 0)})
-    return jsonify({"user": user_json(user), "equity": db.equity(user["id"]), "positions": positions})
+    positions, races = [], {}
+    with db.transaction() as conn:   # one connection for the whole page
+        for p in db.user_positions(user["id"], conn=conn):
+            qty = int(p["qty"])
+            if qty == 0:
+                continue
+            # B's user_positions already joins the market fields + price; fall back if absent
+            m = p if "question" in p else (db.get_market(p["market_id"], conn=conn) or {})
+            price = p["price"] if p.get("price") is not None else db.current_price(p["market_id"], conn=conn)
+            rid = m.get("race_id")
+            if rid and rid not in races:
+                races[rid] = db.get_race(rid, conn=conn)
+            race = races.get(rid)
+            positions.append({
+                "market_id": p["market_id"], "question": m.get("question"), "status": m.get("status"),
+                "race_id": rid, "candidate": m.get("candidate"),
+                "position": race["position"] if race else None,
+                "qty": qty, "label": "YES" if qty > 0 else "NO", "shares": abs(qty),
+                "price": price, "value": qty * price, "net_cost": int(p.get("net_cost") or 0)})
+        body = {"user": user_json(user, conn), "equity": db.equity(user["id"], conn=conn), "positions": positions}
+    return jsonify(body)
 
 
 # ---------------------------------------------------------------- admin

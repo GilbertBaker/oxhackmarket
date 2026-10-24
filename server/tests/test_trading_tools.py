@@ -16,7 +16,7 @@ import trading_api
 def test_create_race_adds_ron_and_opens(env):  # noqa: F811
     fake, eng = env
     rid = trading.create_race("Michaelmas 2026", "President", "2026-11-27T18:00:00Z", "Cherwell",
-                              [{"name": "Jane Doe", "prior": 50}, "John Roe"])
+                              [{"name": "Jane Doe", "prior": 50}, "John Roe"], add_ron=True)
     ms = fake.race_markets(rid)
     assert [m["candidate"] for m in ms] == ["Jane Doe", "John Roe", trading.RON_NAME]
     assert ms[0]["question"] == "Will Jane Doe be elected President (Michaelmas 2026)?"
@@ -28,6 +28,29 @@ def test_create_race_adds_ron_and_opens(env):  # noqa: F811
         trading.add_candidate(rid, "jane doe")
     mid = trading.add_candidate(rid, "Late Entrant", 10)
     assert fake.markets[mid]["status"] == "open"
+
+
+def test_cuppers_match(env):  # noqa: F811
+    fake, eng = env
+    rid = trading.create_race("Michaelmas 2026", "Men's Football Cuppers: Keble vs Worcester",
+                              "2026-11-01T14:00:00Z", "Final score reported by the OUAFC",
+                              [{"name": "Keble", "prior": 45}, {"name": "Draw", "prior": 20}, "Worcester"],
+                              description="Round 1")
+    ms = {m["candidate"]: m for m in fake.race_markets(rid)}
+    assert set(ms) == {"Keble", "Draw", "Worcester"}            # no RON
+    assert ms["Keble"]["question"] == "Will Keble beat Worcester (Men's Football Cuppers, Michaelmas 2026)?"
+    assert ms["Worcester"]["question"] == "Will Worcester beat Keble (Men's Football Cuppers, Michaelmas 2026)?"
+    assert ms["Draw"]["question"] == "Will Keble vs Worcester end in a draw (Men's Football Cuppers, Michaelmas 2026)?"
+    assert all(m["category"] == "cuppers" for m in ms.values())
+    assert fake.races[rid]["description"] == "Round 1"
+    with pytest.raises(trading.TradingError, match="Duplicate"):
+        trading.create_race("MT", "X: A vs B", "2026-11-01T14:00:00Z", "x", ["A", "a"])
+    # resolve: one winner, everyone else NO
+    u, v = fake.add_user("u"), fake.add_user("v")
+    trading.place_order(u, ms["Draw"]["id"], "YES", "buy", "limit", 20, 10)
+    trading.place_order(v, ms["Draw"]["id"], "NO", "buy", "limit", 80, 10)
+    trading.resolve_race(rid, [ms["Draw"]["id"]])
+    assert fake.users[u]["cash"] == 100000 - 200 + 1000 and fake.users[v]["cash"] == 100000 + 200 - 1000
 
 
 def test_proposed_then_approve_or_reject(env):  # noqa: F811
@@ -130,7 +153,7 @@ def test_marketctl_end_to_end(env, capsys):  # noqa: F811
         run("create-race", "--election", "MT26", "--position", "President",
             "--closes-at", "2026-11-27T18:00:00Z", "Jane Doe:55", "John Roe:40")
         out = capsys.readouterr().out
-        assert "Jane Doe" in out and "RON" in out
+        assert "Jane Doe" in out and "RON" not in out
         mid = next(m["id"] for m in fake.markets.values() if m["candidate"] == "Jane Doe")
         mm_bot.requote_all()
         run("book", str(mid))
