@@ -1,0 +1,171 @@
+================================================================================
+STILL TO DO: STREAM B (DATA / TIMESCALEDB / TIME FEATURES)
+================================================================================
+Written 2026-10-25 from the plan files, DEVLOG, COLLAB 14 and the current code
+on branch `engine` (515a223). The DB safety rules (COLLAB 4) still apply to
+every item: only touch schema `oxmarket`, and only B runs DDL or deletes rows.
+
+Done already: B1 skeleton, B2 schema applied, B3 db.py + tests, B4 data_api,
+B5 jobs.py, plus GET /api/stats.
+
+In order of priority for the demo:
+
+--------------------------------------------------------------------------------
+1. Switch the connection pool to autocommit (A's request, about 5 minutes)
+--------------------------------------------------------------------------------
+  File: server/db.py, pool() (around line 47).
+  Now:
+      _pool = ConnectionPool(
+          _conninfo(), min_size=1, max_size=10, open=True,
+          check=ConnectionPool.check_connection, max_idle=300,
+          kwargs={"row_factory": dict_row,
+                  "options": f"-c search_path={SCHEMA},public -c timezone=UTC"})
+  Change:
+    - add "autocommit": True to kwargs
+    - drop check=ConnectionPool.check_connection (or keep it only together with
+      max_idle). It costs an extra round trip on every checkout.
+  Why: the DB is ~85 ms per round trip away. A measured a single query at
+  346 ms now vs 97 ms with autocommit, about 3.5x faster for every endpoint.
+  db.transaction() keeps working because conn.transaction() sends an explicit
+  BEGIN in autocommit mode.
+  Check: ensure_schema() saves and restores c.autocommit itself, so it is fine.
+  Run pytest server/tests/test_db.py and test_trading_live.py (TRADING_LIVE=1)
+  afterwards.
+
+--------------------------------------------------------------------------------
+2. Delete the leftover test races (A's request)
+--------------------------------------------------------------------------------
+  46 races named "TEST f3c691 0..45" (users test_f3c691_*) are still in
+  oxmarket, mostly status 'open'. Markets 115, 117, 192 and 193 have
+  one-sided positions with no trades, so trading.check_invariants() flags
+  them, and with jobs on the MM bot would quote all of their ~130 markets.
+  - First SELECT to confirm exactly what matches (election/position LIKE
+    'TEST f3c691%', usernames LIKE 'test_f3c691_%').
+  - Delete in FK order, only those rows: trades, price_ticks, orders,
+    positions, ai_briefs, markets, races, portfolio_snapshots, users.
+  - Do it with the app stopped, or restart it afterwards, because the engine
+    holds open books for those markets in memory.
+  - Then GET /api/admin/invariants should return {"ok": true}.
+  - Also find why test_db.py cleanup missed them (a run that crashed before
+    teardown?) and make the fixture cleanup run in a finally block.
+
+--------------------------------------------------------------------------------
+3. Fix test_db.py::test_time_series (A's request)
+--------------------------------------------------------------------------------
+  server/tests/test_db.py:122. The test backdates trades 2 h (t1 = now - 2h),
+  but candles_5m has already materialised that window, so back-filled rows
+  don't show up until the next policy refresh. Real-time aggregation only
+  covers the unmaterialised tail.
+  Fix, either:
+    a) after inserting the trades, in autocommit (not inside a transaction):
+         CALL refresh_continuous_aggregate('oxmarket.candles_5m', t1 - 5min, now);
+         (and candles_1h if the test reads it)
+    b) or use timestamps inside the not-yet-materialised window (last few min).
+  (a) is closer to how real back-filled data behaves. test_equity_with_short
+  depends on this test's prices, so it should pass again with the fix. Ideally
+  make it independent of test order.
+
+--------------------------------------------------------------------------------
+4. Make the jobs cheaper (follows from A's latency findings)
+--------------------------------------------------------------------------------
+  jobs.snapshot_ticks() makes 3-4 db calls per open market, each on its own
+  pooled connection (~340 ms each today, ~100 ms with autocommit). With 30
+  markets a 15 s pass can take longer than 15 s.
+  - Simplest: use trading.record_ticks() (A's helper, one price_tick per open
+    market) and keep the "skip unchanged and < 60 s old" rule, or
+  - open `with db.transaction() as conn:` once per pass and pass conn= to
+    list_markets / last_trade_price / last_tick / record_tick.
+  Same idea for snapshot_portfolios() (db.equity per user).
+
+--------------------------------------------------------------------------------
+5. server/seed.py (task B6, NOT STARTED). Needed so the demo isn't empty
+--------------------------------------------------------------------------------
+  The AGENT_B spec describes Union elections; scope is now CUPPERS MATCHES
+  (COLLAB 14, 2026-10-24 23:55 [C] and 2026-10-25 [A]). Adapted spec:
+    python server/seed.py               ensure the house user exists, nothing else
+    python server/seed.py --demo        create demo matches (idempotent)
+    python server/seed.py --history     synthetic past prices for demo matches
+    python server/seed.py --purge-demo  delete ONLY demo races and their rows
+  --demo:
+    - Create races with trading.create_race(...) (add_ron defaults to False,
+      it builds the question text and category 'cuppers' from the position):
+        election  = "DEMO Michaelmas 2026"
+        position  = "<Competition>: <Home> vs <Away>",
+                    e.g. "Men's Football Cuppers: Keble vs Worcester"
+        description = "DEMO DATA · Round 1 · Men's Football Cuppers"
+        candidates = [{"name": Home, "prior": p}, {"name": "Draw", "prior": d},
+                      {"name": Away, "prior": q}]  (no Draw where a draw can't
+                      happen, e.g. rowing/netball knockouts); priors sum to ~100
+        seats = 1, closes_at = kick-off
+    - Mix of states so every UI path shows: a few upcoming (kick-off in 1-7
+      days), one kicking off within the hour (countdown), one closed awaiting
+      a result, one resolved (close_race + resolve_race with a winner).
+    - Skip any (election, position) that already exists (create_race raises
+      TradingError on duplicates).
+    - Names must be real colleges but the data clearly marked as demo in the
+      description and README.
+  --history:
+    - ~3 days of synthetic trades + price_ticks per demo market as random
+      walks, renormalised so each match's outcomes sum to ~100, with a couple
+      of "news" jumps so the Time Machine shows lead changes.
+    - Insert via db.py functions with explicit timestamps; the house user is
+      both sides so cash/positions stay consistent. Use one connection per
+      market and executemany / pipeline, otherwise thousands of rows at
+      ~100 ms each will take ages.
+    - Back-filled rows land in already-materialised cagg windows, so finish
+      with refresh_continuous_aggregate for candles_5m and candles_1h over the
+      generated range (same issue as item 3).
+    - Also backfill portfolio_snapshots for a few demo users so the hindsight
+      leaderboard chart has lines.
+  Alternative/extra: `python server/marketctl.py sim` (A) drives simulated
+  traders through the live API to create REAL recent history.
+  --purge-demo: delete only races whose election starts with "DEMO " and their
+  markets/orders/positions/trades/ticks/briefs. Never anything else.
+  Check: --demo twice creates no duplicates; --purge-demo leaves other races
+  untouched; check_invariants() is clean afterwards.
+
+--------------------------------------------------------------------------------
+6. Timescale showcase & README write-up (task B7, NOT STARTED). Tiger prize
+--------------------------------------------------------------------------------
+  README.md still has "_TODO (B)_" under "Data & TIME (B)" and "_TODO (B7)_"
+  under "TimescaleDB usage". Fill in:
+  Data & TIME (B):
+    - schema overview (users, races, markets, orders, positions, ai_briefs,
+      hypertables trades / price_ticks / portfolio_snapshots), data APIs,
+      background jobs (ticks 15 s, auto-close 60 s, portfolio 5 min), seed.py
+      usage and the fact that seeded history is synthetic demo data.
+  TimescaleDB usage, each with the snippet from db.py/schema.sql and why it
+  matters for the TIME theme:
+    - hypertables with 1-day chunks (trades, price_ticks, portfolio_snapshots)
+    - continuous aggregates candles_5m / candles_1h, real-time aggregation,
+      refresh policies (jobs 1001/1002)
+    - compression on price_ticks > 1 day, segmentby market_id, orderby time
+      DESC (job 1003), with the measured ratio from /api/stats
+    - retention of price_ticks after 90 days (job 1004)
+    - time_bucket, time_bucket_gapfill + locf (price/race history, sparklines)
+    - first()/last() for OHLC, last(equity, time) for leaderboard history
+    - as-of LATERAL lookup (time <= t ORDER BY time DESC LIMIT 1) behind the
+      Time Machine
+    - /api/stats "under the hood" endpoint
+  Also: EXPLAIN ANALYZE one candle query on the cagg vs the raw trades table
+  and record both timings in DEVLOG (planned in B7, not done).
+  Also fix the README intro, which still says "Oxford Union elections": it is
+  Cuppers match markets now.
+
+--------------------------------------------------------------------------------
+7. Verification still open (from AGENT_B VERIFICATION)
+--------------------------------------------------------------------------------
+  [ ] pytest server/tests/test_db*.py fully green (after item 3)
+  [ ] With A's real trading code running: ticks appear every 15 s, auto-close
+      closes an expired match (all its outcome markets), portfolio snapshots
+      accumulate. Check in the DB and record in DEVLOG.
+  [ ] seed.py --demo / --history / --purge-demo checks (item 5)
+  [ ] Confirm again that nothing outside schema oxmarket changed
+  [ ] DEVLOG entries for B5, B6, B7 and the items above (only B1-B4 are logged)
+
+--------------------------------------------------------------------------------
+8. After B is done
+--------------------------------------------------------------------------------
+  - Tell A and C in COLLAB 14 (autocommit on, test races gone, seed commands).
+  - Merge to main; then the whole team runs the end-to-end demo check: real
+    C++ engine, live DB, browser (C7), and the demo script / Devpost (M4).
