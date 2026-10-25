@@ -44,7 +44,7 @@ def _generate(kind, prompt):
     global _client
     from google import genai  # imported lazily so FAKE_AI runs without the SDK
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")
     with _lock:
         if _client is None:
             _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])

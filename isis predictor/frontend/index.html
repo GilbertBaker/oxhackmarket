@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Isis Flag Forecast</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <a class="brand" href="/"><span class="brand-mark">&gt;_</span> Isis Flag Forecast</a>
+      <span class="tag">OURCs · Oxford</span>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">THE NEXT 5 DAYS ON THE ISIS</p>
+      <h1>When can we <span>row?</span></h1>
+      <p class="subtitle">A forecast of the OURCs flag from river flow, rain and recent flags. Not official guidance: the official flag is set by OURCs.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="forecast-title">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">FORECAST</p>
+          <h2 id="forecast-title">5-day flag forecast</h2>
+        </div>
+        <span class="status" id="backend-status">Checking backend…</span>
+      </div>
+      <div role="status" aria-live="polite">
+        <p class="countdown" id="countdown">Loading forecast…</p>
+        <p class="official" id="official"></p>
+      </div>
+      <ol class="days" id="days" aria-label="Forecast by day"></ol>
+      <div class="explanation" id="explanation-box" hidden>
+        <div class="result-label" id="explanation-source">WHY</div>
+        <p id="explanation"></p>
+      </div>
+      <p class="freshness" id="freshness"></p>
+    </section>
+
+    <section class="panel" aria-labelledby="skill-title" id="skill-panel" hidden>
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">TRACK RECORD</p>
+          <h2 id="skill-title">How good is this forecast?</h2>
+        </div>
+      </div>
+      <p class="note" id="skill-note"></p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Days ahead</th>
+              <th scope="col">Copy today's flag</th>
+              <th scope="col">Model</th>
+              <th scope="col">Flag changes the model caught</th>
+            </tr>
+          </thead>
+          <tbody id="skill-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <span>Data: Environment Agency, Open-Meteo, OURCs · stored in Tiger Data</span>
+      <span>Model: TensorFlow ensemble (<code>neuralnet.py</code>)</span>
+    </footer>
+  </main>
+</body>
+</html>

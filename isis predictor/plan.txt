@@ -1,0 +1,87 @@
+# Build Prompt: Time-Aware Isis Rowing Flag Forecast
+
+You are a strong software engineer working in this repository. Build the project described below, first inspecting the existing code and data. Preserve the current lightweight Python and vanilla HTML/CSS/JavaScript approach unless a clearly justified change is needed. Do not expose or read credential files.
+
+## Product goal
+
+Turn the current “Will tomorrow be green?” page into a time-aware river conditions dashboard for the Isis in Oxford. Help users understand the current official OURCs flag, how river and weather conditions are changing, and what the model expects next.
+
+This is an informational forecast, not official rowing guidance or a safety clearance. Clearly distinguish the official OURCs flag from the project's prediction.
+
+## Existing project context
+
+- The Python HTTP server is in `backend/server.py`.
+- Live conditions and the official OURCs flag are fetched in `backend/conditions.py`.
+- The prediction endpoint currently lives in `backend/predict.py`; inspect its actual current state before changing it.
+- The frontend is plain HTML, CSS, and JavaScript in `frontend/`.
+- Historical flag/weather data is in `hectorcsv1.csv`; derived river/rain data is in `data/`.
+- Feature construction and time-series evaluation are in `features.py` and `experiments.py`.
+- The project already documents a 07:00 daily prediction setup and no-lookahead checks. Preserve the time cutoffs and avoid training/evaluation leakage.
+
+## Features to build
+
+### 1. Isis timeline
+
+Create an easy-to-read timeline that places historical and forecast river flow, rainfall, and official flag changes on a shared time axis.
+
+- Show observed versus forecast periods distinctly.
+- Mark flag changes and make their timestamps clear.
+- Include units, labels, and a useful time range for a quick demo.
+- If reliable historical flag-change timestamps or forecast series are unavailable, show only supported data and explain the gap in the UI rather than inventing values.
+- Keep the visualization usable on a phone and accessible to keyboard and screen-reader users.
+
+### 2. Forecast explanation and uncertainty
+
+Present the next-day flag prediction with a concise explanation based on available inputs, such as recent river-flow trend, upstream flow, and rain forecast.
+
+- Show when input data was last refreshed and identify stale or missing inputs.
+- Communicate confidence or uncertainty only if it can be supported by the model/evaluation. Do not present an uncalibrated score as a probability.
+- Use an explicit “uncertain” or unavailable state when inputs or model support are insufficient.
+- Keep the official flag and predicted flag visually and textually distinct.
+
+### 3. “When might conditions change?” indication
+
+Add a cautious trend/early-warning view indicating whether available evidence suggests conditions may be worsening or easing.
+
+- Include a lead-time estimate only if the model and historical evaluation support one.
+- Explain the evidence and uncertainty in plain language.
+- Never imply that a flag change is certain or provide rowing clearance.
+- If there is not enough evidence to estimate timing responsibly, show a trend without a timing claim.
+
+### 4. Time-travel replay
+
+Allow users to select a historical date and inspect what the project could have forecast using only information available at that date.
+
+- Reconstruct the inputs at the relevant historical cutoff and compare the historical prediction with the official flag that followed.
+- Respect the documented 07:00 cutoff and exclude future observations and labels from prediction inputs.
+- Make the selected forecast time, target time, actual outcome, and missing-data limitations explicit.
+- Add a simple historical performance summary only if it can be computed correctly from chronological evaluation.
+
+### 6. Ask questions about the forecast
+
+Add a Gemini-powered question panel for questions such as “Why is the flag predicted to change?” and “What happened after yesterday’s rain?”
+
+- First inspect the repository for existing Gemini integration and available configuration. Do not print, expose, commit, or hardcode API keys or other credentials.
+- Ground answers in the project’s actual weather, flow, flag, prediction, and freshness data. The model must not fabricate observations or official advice.
+- Include the relevant data/time context in responses and say when the data cannot answer a question.
+- Keep the API key on the server side; never place it in frontend JavaScript.
+- If Gemini credentials are unavailable, keep the core dashboard usable and provide a clear disabled/configuration state rather than breaking the app.
+
+## Implementation expectations
+
+1. Inspect the repository and identify existing behavior before editing. Reuse existing routes, data structures, and styling where sensible.
+2. Implement the UI and backend changes needed for the four features above. Keep secrets out of source control and logs.
+3. Handle API failures, stale data, missing observations, invalid dates, and empty historical ranges without crashing.
+4. Avoid adding dependencies unless they materially improve the result; document any dependency or setup changes.
+5. Update the README with run instructions and any optional Gemini configuration.
+6. Do not add tests or run a test suite unless explicitly asked. You may perform basic manual checks needed to ensure the requested implementation works.
+7. At completion, summarize files changed, behavior added, configuration needed, and known limitations.
+
+## Acceptance criteria
+
+- The dashboard clearly separates official current flag, model prediction, and observed/forecast environmental data.
+- The timeline communicates time, units, source/freshness, and observed-versus-forecast status.
+- The explanation and change-trend views are evidence-based and communicate uncertainty honestly.
+- Historical replay cannot use information from after its prediction cutoff.
+- The Gemini panel is grounded, server-side, and degrades gracefully when unconfigured or unavailable.
+- The existing application remains usable when one external data source fails.

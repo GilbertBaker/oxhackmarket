@@ -1,0 +1,139 @@
+{
+  "tested_from": "2024-11-02",
+  "tested_to": "2026-10-23",
+  "method": "expanding-window cross-validation, 5 folds, 5-day purge gap, 3 seeds, ensemble of 5",
+  "horizons": [
+    {
+      "horizon_days": 1,
+      "copy_today": {
+        "exact": 0.9045226130653267,
+        "green_or_not": 0.9698492462311558,
+        "days": 398.0,
+        "change_days": 42.0,
+        "change_days_right": 4.0,
+        "false_changes": 0.0
+      },
+      "model": {
+        "exact": 0.8768844221105527,
+        "green_or_not": 0.9597989949748744,
+        "days": 398.0,
+        "change_days": 42.0,
+        "change_days_right": 15.666666666666666,
+        "false_changes": 22.666666666666668
+      }
+    },
+    {
+      "horizon_days": 2,
+      "copy_today": {
+        "exact": 0.8337531486146096,
+        "green_or_not": 0.9445843828715366,
+        "days": 397.0,
+        "change_days": 74.0,
+        "change_days_right": 8.0,
+        "false_changes": 0.0
+      },
+      "model": {
+        "exact": 0.8438287153652393,
+        "green_or_not": 0.9554995801847187,
+        "days": 397.0,
+        "change_days": 74.0,
+        "change_days_right": 27.666666666666668,
+        "false_changes": 15.666666666666666
+      }
+    },
+    {
+      "horizon_days": 3,
+      "copy_today": {
+        "exact": 0.7828282828282829,
+        "green_or_not": 0.9191919191919192,
+        "days": 396.0,
+        "change_days": 98.0,
+        "change_days_right": 12.0,
+        "false_changes": 0.0
+      },
+      "model": {
+        "exact": 0.8005050505050505,
+        "green_or_not": 0.9326599326599326,
+        "days": 396.0,
+        "change_days": 98.0,
+        "change_days_right": 32.666666666666664,
+        "false_changes": 13.666666666666666
+      }
+    },
+    {
+      "horizon_days": 4,
+      "copy_today": {
+        "exact": 0.7417721518987341,
+        "green_or_not": 0.8936708860759494,
+        "days": 395.0,
+        "change_days": 118.0,
+        "change_days_right": 16.0,
+        "false_changes": 0.0
+      },
+      "model": {
+        "exact": 0.7721518987341772,
+        "green_or_not": 0.9130801687763713,
+        "days": 395.0,
+        "change_days": 118.0,
+        "change_days_right": 41.666666666666664,
+        "false_changes": 13.666666666666666
+      }
+    },
+    {
+      "horizon_days": 5,
+      "copy_today": {
+        "exact": 0.7106598984771574,
+        "green_or_not": 0.8705583756345178,
+        "days": 394.0,
+        "change_days": 134.0,
+        "change_days_right": 20.0,
+        "false_changes": 0.0
+      },
+      "model": {
+        "exact": 0.7529610829103215,
+        "green_or_not": 0.8993231810490694,
+        "days": 394.0,
+        "change_days": 134.0,
+        "change_days_right": 50.333333333333336,
+        "false_changes": 13.666666666666666
+      }
+    }
+  ],
+  "calibration": [
+    {
+      "from": 0.0,
+      "to": 0.2,
+      "predictions": 2249,
+      "mean_p_green": 0.045477308332920074,
+      "observed_green": 0.041351711871943087
+    },
+    {
+      "from": 0.2,
+      "to": 0.4,
+      "predictions": 252,
+      "mean_p_green": 0.2708936929702759,
+      "observed_green": 0.24603174603174602
+    },
+    {
+      "from": 0.4,
+      "to": 0.6000000000000001,
+      "predictions": 66,
+      "mean_p_green": 0.5065747499465942,
+      "observed_green": 0.5757575757575758
+    },
+    {
+      "from": 0.6000000000000001,
+      "to": 0.8,
+      "predictions": 159,
+      "mean_p_green": 0.7072710990905762,
+      "observed_green": 0.5660377358490566
+    },
+    {
+      "from": 0.8,
+      "to": 1.0,
+      "predictions": 3214,
+      "mean_p_green": 0.9870764017105103,
+      "observed_green": 0.9704418170504044
+    }
+  ]
+}

@@ -19,6 +19,7 @@ log = logging.getLogger("content")
 
 BRIEF_EVERY_S = 30 * 60
 BRIEF_MOVE_POINTS = 5
+BRIEF_MIN_AGE_S = 6 * 3600     # free-tier Gemini is 20 requests/day: don't rewrite a brief more often
 DIGEST_EVERY_S = 24 * 3600
 
 
@@ -27,8 +28,9 @@ PROPOSE_BATCH = 10
 
 def process_new_articles(limit=PROPOSE_BATCH):
     """Gemini proposals for unprocessed articles -> proposed races. Returns races created.
-    Without Gemini this is a no-op and the articles stay unprocessed (admin queue)."""
-    if ai._fake():
+    Without Gemini, or unless AI_PROPOSALS=1, this is a no-op and the articles stay
+    unprocessed (admin queue)."""
+    if ai._fake() or os.environ.get("AI_PROPOSALS") != "1":
         return 0
     import trading
     made = 0
@@ -75,11 +77,16 @@ def refresh_digest():
 
 
 def _brief_pass():
-    """Refresh briefs for open matches with no brief yet or a move of >= 5 points in 24h."""
+    """Refresh briefs for open matches with no brief yet, or a move of >= 5 points in 24h
+    and a brief older than BRIEF_MIN_AGE_S (so restarts don't spend the Gemini quota)."""
     n = 0
+    stale_before = db.utcnow() - timedelta(seconds=BRIEF_MIN_AGE_S)
     for r in db.list_races("open"):
+        last = db.latest_brief(r["id"], "brief")
+        if last is not None and last["created_at"] > stale_before:
+            continue
         moved = any(abs(o["change"]) >= BRIEF_MOVE_POINTS for o in _outcomes(r["id"]))
-        if moved or db.latest_brief(r["id"], "brief") is None:
+        if moved or last is None:
             refresh_brief(r["id"])
             n += 1
     return n

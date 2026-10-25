@@ -1,0 +1,69 @@
+Our model was 98% accurate and completely useless
+==================================================
+
+(An OxHack write-up: forecasting the Oxford rowing flag)
+
+Every morning, hundreds of Oxford rowers check one thing before getting out of bed: the OURCs flag on the Isis. Green means everyone can row. Red or Black means nobody can. In between (Light Blue, Dark Blue, Amber), only some crews can go out. The flag mostly depends on how fast the river is running, and we wanted to predict it in advance.
+
+Theme: time. Our question was "when can we row?"
+
+
+1. The 98% model
+----------------
+
+We started with what we had: a CSV with the weather at 07:00 and that morning's flag for every day since January 2024. We gave a TensorFlow network the day's weather plus yesterday's flag and asked whether today would be green.
+
+Test accuracy: 98.2%. We were delighted for about a minute.
+
+Then we added one line: a "model" that just predicts yesterday's flag. It also scored 98.2%. When we checked properly, our network had learned exactly that rule. On all 570 days it never once disagreed with yesterday's flag. It caught 0 of the 17 days when the flag actually changed.
+
+The flag stays the same most days, so any model that copies yesterday looks brilliant. The only days worth predicting are the days it changes, and that is where we should have been measuring.
+
+
+2. Weather is the wrong data
+----------------------------
+
+Forcing the network to use the weather made it worse: it predicted 60+ flag changes that never happened. Then we looked at when the changes happen. Almost every change to the 07:00 flag had already been made the previous afternoon. A 07:00 weather snapshot can't predict a decision made upstream of it.
+
+What actually drives the flag is the river. The Environment Agency publishes 15-minute river flow for free, and one number explained almost everything. When Thames flow at Farmoor is below about 20 m3/s, the flag is always green. Above about 35 m3/s, it is never green. Between the two, it depends on whether the river is rising or falling.
+
+
+3. The bug that would have fooled us
+------------------------------------
+
+Forecasting with time-series data has one rule: never let the model see the future. We wrote a test that rebuilds each day's inputs after deleting every reading after 07:00 that day, and checks that nothing changes.
+
+It failed straight away. Our "flow change over 24 hours" inputs were matched to the wrong day by a date-labelling slip, so some days were using readings from the following days. Nothing looked wrong in the numbers or the accuracy. Only the test caught it.
+
+The same thinking applies to rain forecasts. Using the rain that actually fell would be cheating, so we used Open-Meteo's archive of forecasts as they were issued 1 to 5 days earlier.
+
+
+4. What actually works: looking further ahead
+---------------------------------------------
+
+Even with river data, beating "copy today's flag" for tomorrow is hard: copying is right 90.5% of the time. But copying gets worse the further ahead you look, while river trends and rain forecasts still carry information.
+
+We backtested on every day from November 2024 to October 2026, always training only on earlier days:
+
+  Days ahead   Copy today's flag   Our model
+  1            90.5%               87.7%
+  2            83.4%               84.4%
+  3            78.3%               80.1%
+  5            71.1%               75.3%
+
+So the site uses whichever did better at each horizon: copying for tomorrow, the model for days 2 to 5. Its chance-of-green numbers hold up too. When it says over 80%, it was green 97% of the time.
+
+
+5. What we built
+----------------
+
+"When can we row?" shows a countdown ("Green likely in 3 days"), a 5-day flag forecast with the chance of green for each day, and a plain-English explanation written by Gemini using only the forecast's real inputs. The river readings, rain forecasts and every forecast we issue live in Tiger Data (TimescaleDB), so the site can show its own track record over time.
+
+
+What we learned
+---------------
+
+- Always compare against the dumbest possible baseline first. Ours was "copy yesterday", and it beat our first model.
+- Measure the days that matter. 98% accuracy said nothing about the days the flag changed.
+- Write a test that deletes the future and checks nothing changes. It caught a bug that the accuracy numbers hid.
+- More inputs usually made the model worse. Choosing the right data (the river) mattered far more than model size.
