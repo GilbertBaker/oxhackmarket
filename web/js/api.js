@@ -41,6 +41,8 @@
     get: (path) => request("GET", path),
     post: (path, body) => request("POST", path, body === undefined ? {} : body),
     del: (path) => request("DELETE", path),
+    put: (path, body) => request("PUT", path, body === undefined ? {} : body),
+    patch: (path, body) => request("PATCH", path, body === undefined ? {} : body),
     isMock,
   };
 })();

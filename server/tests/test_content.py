@@ -33,6 +33,6 @@ def test_fake_digest():
              {"position": "C: D vs E", "closes_at": "2026-10-26T13:00:00Z",
               "candidates": [{"candidate": "D", "price": 55, "change": 0}, {"candidate": "E", "price": 45, "change": 0}]}]
     text = ai.daily_digest(races)
-    assert text.startswith("2 Cuppers matches are open for trading. Next up is D vs E, with D favoured at 55%.")
+    assert text.startswith("2 markets are open for trading. Next up is D vs E, with D favoured at 55%.")
     assert "Biggest mover: A in A vs B (+5 points)." in text
-    assert ai.daily_digest([]) == "No Cuppers matches are open for trading right now."
+    assert ai.daily_digest([]) == "No markets are open for trading right now."

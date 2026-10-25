@@ -101,8 +101,21 @@
     const rest = cands.filter((c) => c !== home && c !== away && c !== draw).sort((a, b) => (b.price || 0) - (a.price || 0));
     return [home, draw, away, ...rest].filter(Boolean);
   }
-  const outcomeLabel = (name) => (isDraw(name) ? "Draw" : `${name} win`);
-  const outcomeNoLabel = (name) => (isDraw(name) ? "Not a draw" : `${name} doesn't win`);
+  // Market kinds (race.kind): "match" (Cuppers, the default), "binary" (one YES/NO question,
+  // a single market named "Yes") and "multi" (named outcomes). Pass the race when you have it.
+  const isBinary = (name, race) => (race && race.kind ? race.kind === "binary" : name === "Yes");
+  function outcomeLabel(name, race, short) {
+    if (isBinary(name, race)) return "Yes";
+    if (race && race.kind === "multi") return name;
+    if (isDraw(name)) return "Draw";
+    return short ? name : `${name} win`;
+  }
+  function outcomeNoLabel(name, race) {
+    if (isBinary(name, race)) return "No";
+    if (race && race.kind === "multi") return `Not ${name}`;
+    return isDraw(name) ? "Not a draw" : `${name} doesn't win`;
+  }
+  const raceTitle = (r) => (!r ? "" : r.kind && r.kind !== "match" ? r.position : parseMatch(r.position).title);
 
   const SPORTS = [
     ["Football", "⚽", /football|soccer|futsal/i], ["Rugby", "🏉", /rugby/i], ["Hockey", "🏑", /hockey/i],
@@ -111,9 +124,30 @@
     ["Badminton", "🏸", /badminton/i], ["Volleyball", "🏐", /volleyball/i], ["Ultimate", "🥏", /ultimate|frisbee/i],
     ["Squash", "🎾", /squash/i], ["Darts", "🎯", /darts/i], ["Pool", "🎱", /pool|snooker/i], ["Chess", "♟️", /chess/i],
   ];
-  function sportOf(position) {
+  // Category icons for non-match markets; categories, sports and their patterns come from
+  // /api/meta (the reference tables) once loaded, the lists above are the offline fallback.
+  const CAT_ICONS = { news: "📰", union: "🏛️", university: "🎓", other: "❓", cuppers: "🏆" };
+  function sportOf(position, race) {
+    if (race && race.kind && race.kind !== "match") {
+      const cat = (App.meta && App.meta.categories.find((c) => c.slug === race.category)) || null;
+      return { name: cat ? cat.name : race.category || "Other", icon: CAT_ICONS[race.category] || "❓" };
+    }
     for (const s of SPORTS) if (s[2].test(position || "")) return { name: s[0], icon: s[1] };
     return { name: "Other", icon: "🏆" };
+  }
+  let metaPromise = null;
+  function loadMeta(force) {
+    if (!metaPromise || force) {
+      metaPromise = api.get("/api/meta").then((m) => {
+        App.meta = m;
+        const sports = (m.sports || []).map((s) => {
+          try { return [s.name, s.icon, new RegExp(s.pattern, "i")]; } catch (e) { return null; }
+        }).filter(Boolean);
+        if (sports.length) SPORTS.splice(0, SPORTS.length, ...sports);
+        return m;
+      }, (e) => { metaPromise = null; throw e; });
+    }
+    return metaPromise;
   }
 
   // A position in the outcome's own terms (YES or NO shares).
@@ -254,7 +288,7 @@
   window.App = Object.assign(App, {
     $, $$, esc, pence, signedPence, pct, yesNo, compact, isoNoMs, countdown, rel, dateTime, kickoff, clock, timeLabel,
     dayKey, dayLabel, changeHtml, qs, errText, msg, sourceName, parseMatch, isDraw, orderOutcomes, outcomeLabel,
-    outcomeNoLabel, sportOf, positionView, poll, initNav, setUser, refreshUser, loginHref, PALETTE, lineChart,
+    outcomeNoLabel, raceTitle, isBinary, loadMeta, sportOf, positionView, poll, initNav, setUser, refreshUser, loginHref, PALETTE, lineChart,
     setChartData, historySince, tickCountdowns,
   });
 })();

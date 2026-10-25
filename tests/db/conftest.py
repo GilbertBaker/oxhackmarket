@@ -46,8 +46,9 @@ def autocommit(query, params=None):
 
 def cleanup(tag):
     with db.transaction() as c:
-        races = [r["id"] for r in c.execute(f"SELECT id FROM {S}.races WHERE election LIKE %s",
-                                             (f"TEST {tag}%",)).fetchall()]
+        # admin tests post races under the real term name, tagged in the position instead
+        races = [r["id"] for r in c.execute(f"SELECT id FROM {S}.races WHERE election LIKE %s OR position LIKE %s",
+                                             (f"TEST {tag}%", f"%{tag}%")).fetchall()]
         markets = [r["id"] for r in c.execute(f"SELECT id FROM {S}.markets WHERE race_id = ANY(%s)",
                                               (races,)).fetchall()]
         users = [r["id"] for r in c.execute(f"SELECT id FROM {S}.users WHERE username LIKE %s",
@@ -59,9 +60,12 @@ def cleanup(tag):
         c.execute(f"DELETE FROM {S}.portfolio_snapshots WHERE user_id = ANY(%s)", (users,))
         c.execute(f"DELETE FROM {S}.ai_briefs WHERE race_id = ANY(%s) OR market_id = ANY(%s) OR text LIKE %s",
                   (races, markets, f"TEST {tag}%"))
+        c.execute(f"DELETE FROM {S}.admin_actions WHERE race_id = ANY(%s) OR market_id = ANY(%s)", (races, markets))
         c.execute(f"DELETE FROM {S}.markets WHERE id = ANY(%s)", (markets,))
         c.execute(f"DELETE FROM {S}.races WHERE id = ANY(%s)", (races,))
         c.execute(f"DELETE FROM {S}.articles WHERE url LIKE %s", (f"https://test.invalid/{tag}/%",))
+        c.execute(f"UPDATE {S}.settings SET updated_by = NULL WHERE updated_by = ANY(%s)", (users,))
+        c.execute(f"DELETE FROM {S}.admin_actions WHERE admin_id = ANY(%s)", (users,))
         c.execute(f"DELETE FROM {S}.users WHERE id = ANY(%s)", (users,))
 
 

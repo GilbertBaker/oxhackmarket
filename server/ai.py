@@ -98,7 +98,7 @@ def race_brief(race, candidates_history, articles=None):
 def daily_digest(races):
     """races: [{"position","closes_at","candidates":[{"candidate","price","change"}]}] open matches."""
     if not races:
-        return "No Cuppers matches are open for trading right now."
+        return "No markets are open for trading right now."
     races = sorted(races, key=lambda r: str(r["closes_at"]))
     if not _fake():
         lines = []
@@ -110,7 +110,7 @@ def daily_digest(races):
             return text
     nxt = races[0]
     fav = max(nxt["candidates"], key=lambda c: c["price"]) if nxt["candidates"] else None
-    text = f"{len(races)} Cuppers {'match is' if len(races) == 1 else 'matches are'} open for trading."
+    text = f"{len(races)} {'market is' if len(races) == 1 else 'markets are'} open for trading."
     if fav:
         text += f" Next up is {_split_position(nxt['position'])[1]}, with {_label(fav['candidate'])} favoured at {fav['price']}%."
     movers = [(c, r) for r in races for c in r["candidates"] if c["change"]]

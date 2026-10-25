@@ -18,6 +18,10 @@
   async function loadRace() {
     const d = await api.get(`/api/races/${id}`);
     race = d.race;
+    if (race.kind === "binary" && race.candidates.length) {   // one market: its page is the race page
+      location.replace(`market.html?id=${race.candidates[0].id}`);
+      return;
+    }
     // Colours follow market id, so they don't swap when the order changes.
     race.candidates.slice().sort((a, b) => a.id - b.id).forEach((c, i) => { colors[c.id] = colors[c.id] || PALETTE[i % PALETTE.length]; });
     renderHead();
@@ -25,24 +29,27 @@
   }
 
   function renderHead() {
-    const m = parseMatch(race.position);
-    const s = sportOf(m.competition || race.position);
-    const round = (race.description || "").split(" · ")[0];
+    const isMatch = !race.kind || race.kind === "match";
+    const s = sportOf(isMatch ? parseMatch(race.position).competition || race.position : "", race);
+    const m = isMatch ? parseMatch(race.position) : { competition: s.name, title: race.position };
+    const round = isMatch ? (race.description || "").split(" · ")[0] : "";
     document.title = `${m.title} · OxMarket`;
     $("#crumb-comp").textContent = m.competition || race.election;
     $("#race-icon").textContent = s.icon;
     $("#race-title").textContent = m.title;
     const badge = { open: '<span class="badge badge-open">Trading open</span>', closed: '<span class="badge badge-closed">Awaiting result</span>', resolved: '<span class="badge badge-resolved">Resolved</span>' }[race.status] || "";
     $("#race-meta").innerHTML = `${badge}<span>${esc(m.competition)}${round ? " · " + esc(round) : ""}</span><span>· ${esc(race.election)}</span>`;
+    const [inLbl, pastLbl, stops] = isMatch ? ["Kick-off in", "Kicked off", "Trading stops at kick-off."] : ["Closes in", "Closed", "Trading stops then."];
     $("#closes-box").innerHTML = race.status === "open"
-      ? `<div class="lbl">Kick-off in</div><div class="big num" data-countdown="${esc(race.closes_at)}">${esc(countdown(race.closes_at))}</div><div class="tiny faint">${esc(kickoff(race.closes_at))}. Trading stops at kick-off.</div>`
-      : `<div class="lbl">Kicked off</div><div class="big" style="font-size:18px">${esc(kickoff(race.closes_at))}</div>`;
+      ? `<div class="lbl">${inLbl}</div><div class="big num" data-countdown="${esc(race.closes_at)}">${esc(countdown(race.closes_at))}</div><div class="tiny faint">${esc(kickoff(race.closes_at))}. ${stops}</div>`
+      : `<div class="lbl">${pastLbl}</div><div class="big" style="font-size:18px">${esc(kickoff(race.closes_at))}</div>`;
+    if (!isMatch && race.description) $("#race-meta").innerHTML += `<span>· ${esc(race.description)}</span>`;
 
     const banner = $("#result-banner");
     if (race.status === "resolved") {
       const w = race.candidates.filter((c) => (race.winners || []).includes(c.id));
       banner.className = "banner";
-      banner.innerHTML = `✓ Result: ${esc(w.map((c) => outcomeLabel(c.candidate)).join(", ") || "posted")}`;
+      banner.innerHTML = `✓ Result: ${esc(w.map((c) => outcomeLabel(c.candidate, race)).join(", ") || "posted")}`;
       banner.hidden = false;
     } else if (race.status === "closed") {
       banner.className = "banner closed";
@@ -52,9 +59,10 @@
       banner.hidden = true;
     }
 
-    $("#rules").innerHTML = `<dt>Competition</dt><dd>${esc(m.competition || "–")}</dd>
+    $("#rules").innerHTML = `<dt>${isMatch ? "Competition" : "Category"}</dt><dd>${esc(m.competition || "–")}</dd>
       ${round ? `<dt>Round</dt><dd>${esc(round)}</dd>` : ""}
-      <dt>Kick-off</dt><dd>${esc(kickoff(race.closes_at))}</dd>
+      ${race.seats > 1 ? `<dt>Winners</dt><dd>${race.seats}</dd>` : ""}
+      <dt>${isMatch ? "Kick-off" : "Closes"}</dt><dd>${esc(kickoff(race.closes_at))}</dd>
       <dt>Term</dt><dd>${esc(race.election)}</dd>
       ${race.source_url ? `<dt>Source</dt><dd><a href="${esc(race.source_url)}" target="_blank" rel="noopener">${esc(race.source_name || "Link")}</a></dd>` : ""}`;
     $("#criteria").textContent = race.resolution_criteria || "";
@@ -66,11 +74,11 @@
     const winners = new Set(race.winners || []);
     const fav = outs.reduce((a, c) => (!a || c.price > a.price ? c : a), null);
     $("#cand-body").innerHTML = outs.map((c) => {
-      const name = isDraw(c.candidate) ? "Draw" : c.candidate;
+      const name = outcomeLabel(c.candidate, race, true);
       let action = "";
       if (open) {
-        action = `<a class="btn btn-yes btn-xs" href="market.html?id=${c.id}&amp;outcome=YES" aria-label="Buy YES on ${esc(outcomeLabel(c.candidate))}">Yes ${c.price}p</a>
-          <a class="btn btn-no btn-xs" href="market.html?id=${c.id}&amp;outcome=NO" aria-label="Buy NO on ${esc(outcomeLabel(c.candidate))}">No ${100 - c.price}p</a>`;
+        action = `<a class="btn btn-yes btn-xs" href="market.html?id=${c.id}&amp;outcome=YES" aria-label="Buy YES on ${esc(outcomeLabel(c.candidate, race))}">Yes ${c.price}p</a>
+          <a class="btn btn-no btn-xs" href="market.html?id=${c.id}&amp;outcome=NO" aria-label="Buy NO on ${esc(outcomeLabel(c.candidate, race))}">No ${100 - c.price}p</a>`;
       } else if (resolved) {
         action = winners.has(c.id) ? '<span class="badge badge-won">✓ Result</span>' : '<span class="badge badge-lost">No</span>';
       }
@@ -95,7 +103,7 @@
     series.sort((a, b) => order.indexOf(a.market_id) - order.indexOf(b.market_id));
     const datasets = series.map((s) => {
       const byT = new Map(s.points.map((p) => [p.t, p.close]));
-      return { label: isDraw(s.candidate) ? "Draw" : s.candidate, color: colors[s.market_id] || "#64748b", data: times.map((t) => (byT.has(t) ? byT.get(t) : null)) };
+      return { label: outcomeLabel(s.candidate, race, true), color: colors[s.market_id] || "#64748b", data: times.map((t) => (byT.has(t) ? byT.get(t) : null)) };
     });
     setChartData(chart, times.map((t) => timeLabel(t, bucket)), datasets);
     $("#chart-empty").hidden = times.length > 0;

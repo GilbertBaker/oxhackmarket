@@ -71,31 +71,32 @@
       <dt>Avg price</dt><dd class="num">${v.avg.toFixed(1).replace(/\.0$/, "")}p</dd>
       <dt>Value now</dt><dd class="num">${pence(v.value)}</dd>
       <dt>P&amp;L</dt><dd class="num ${v.pnl >= 0 ? "up" : "down"}">${signedPence(v.pnl)}</dd>
-      <dt>Pays</dt><dd class="num">${pence(v.shares * 100)} if ${esc(v.label === "YES" ? outcomeLabel(market.candidate) : outcomeNoLabel(market.candidate))}</dd></dl>`;
+      <dt>Pays</dt><dd class="num">${pence(v.shares * 100)} if ${esc(v.label === "YES" ? outcomeLabel(market.candidate, race) : outcomeNoLabel(market.candidate, race))}</dd></dl>`;
   }
   async function loadHistory() {
     const since = historySince(bucket);
     const d = await api.get(`/api/markets/${id}/history?bucket=${bucket}${since ? "&since=" + encodeURIComponent(since) : ""}`);
     const pts = d.points || [];
     if (!chart) chart = lineChart($("#m-chart"));
-    setChartData(chart, pts.map((p) => timeLabel(p.t, bucket)), [{ label: outcomeLabel(market.candidate), color: "#0b2a66", fill: true, data: pts.map((p) => p.close) }]);
+    setChartData(chart, pts.map((p) => timeLabel(p.t, bucket)), [{ label: outcomeLabel(market.candidate, race), color: "#0b2a66", fill: true, data: pts.map((p) => p.close) }]);
     $("#chart-empty").hidden = pts.length > 0;
   }
 
   // ------------------------------------------------------------ header
   function renderHead() {
-    const m = parseMatch(race.position);
-    const label = outcomeLabel(market.candidate);
+    const isMatch = !race.kind || race.kind === "match";
+    const m = isMatch ? parseMatch(race.position) : { competition: App.sportOf("", race).name, title: race.position };
+    const label = race.kind === "binary" ? race.position : outcomeLabel(market.candidate, race);
     document.title = `${label} · ${m.title} · OxMarket`;
     $("#crumb-race").textContent = m.title;
     $("#crumb-race").href = `race.html?id=${race.id}`;
-    $("#crumb-out").textContent = isDraw(market.candidate) ? "Draw" : market.candidate;
-    $("#m-icon").textContent = sportOf(m.competition || race.position).icon;
+    $("#crumb-out").textContent = outcomeLabel(market.candidate, race, true);
+    $("#m-icon").textContent = sportOf(m.competition || race.position, race).icon;
     $("#m-title").textContent = label;
     $("#m-sub").innerHTML = `<a href="race.html?id=${race.id}">${esc(m.title)}</a><span>· ${esc(m.competition || race.election)}</span>`;
     $("#closes-box").innerHTML = market.status === "open"
-      ? `<div class="lbl">Kick-off in</div><div class="big num" data-countdown="${esc(market.closes_at)}">${esc(countdown(market.closes_at))}</div><div class="tiny faint">${esc(kickoff(market.closes_at))}</div>`
-      : `<div class="lbl">Kick-off</div><div class="big" style="font-size:18px">${esc(kickoff(market.closes_at))}</div>`;
+      ? `<div class="lbl">${isMatch ? "Kick-off" : "Closes"} in</div><div class="big num" data-countdown="${esc(market.closes_at)}">${esc(countdown(market.closes_at))}</div><div class="tiny faint">${esc(kickoff(market.closes_at))}</div>`
+      : `<div class="lbl">${isMatch ? "Kick-off" : "Closed"}</div><div class="big" style="font-size:18px">${esc(kickoff(market.closes_at))}</div>`;
     $("#m-pct").textContent = pct(market.price);
     $("#m-chg").innerHTML = changeHtml(market.change_24h);
     $("#m-yesno").textContent = yesNo(market.price);
@@ -108,7 +109,7 @@
     if (closed) {
       $("#t-closed").innerHTML = market.status === "resolved"
         ? `<b>${market.outcome === "YES" ? "✓ This outcome happened" : "✗ This outcome didn't happen"}.</b> The market is settled: YES shares paid ${market.outcome === "YES" ? "£1.00" : "£0.00"} each.`
-        : "Trading stopped at kick-off. Waiting for the result.";
+        : `Trading stopped${isMatch ? " at kick-off" : ""}. Waiting for the result.`;
     }
   }
 
@@ -137,8 +138,8 @@
     $("#t-yes-px").textContent = (yes != null ? yes : market.price) + "p";
     $("#t-no-px").textContent = (no != null ? no : 100 - market.price) + "p";
     $("#t-explain").innerHTML = T.outcome === "YES"
-      ? `You win £1 a share if <b>${esc(outcomeLabel(market.candidate))}</b> is the result.`
-      : `You win £1 a share if the result is anything else (<b>${esc(outcomeNoLabel(market.candidate))}</b>).`;
+      ? `You win £1 a share if the answer is <b>${esc(outcomeLabel(market.candidate, race))}</b>.`
+      : `You win £1 a share if the answer is <b>${esc(outcomeNoLabel(market.candidate, race))}</b>.`;
     const sub = $("#t-submit");
     sub.className = `btn btn-block btn-lg ${App.user ? (T.outcome === "YES" ? "btn-yes-solid" : "btn-no-solid") : "btn-primary"}`;
     sub.textContent = App.user ? `Buy ${T.outcome === "YES" ? "Yes" : "No"}` : "Log in to trade";
@@ -172,7 +173,7 @@
       filled = q - rem;
       if (!filled) { el.innerHTML = `<span class="warn">Nothing on offer right now. Use a limit order instead.</span>`; return; }
     }
-    const cond = T.outcome === "YES" ? outcomeLabel(market.candidate) : outcomeNoLabel(market.candidate);
+    const cond = T.outcome === "YES" ? outcomeLabel(market.candidate, race) : outcomeNoLabel(market.candidate, race);
     const pays = filled * 100;
     let html = `Cost <b>${pence(cost)}</b> · pays <b>${pence(pays)}</b> if ${esc(cond)} · potential profit <b class="up">${pence(pays - cost)}</b>`;
     if (T.type === "market") {

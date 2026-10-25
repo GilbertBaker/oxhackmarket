@@ -12,68 +12,193 @@
 <main class="wrap" id="admin-root">
   <div class="row">
     <div>
-      <div class="eyebrow">Admin</div>
-      <h1>Matches &amp; results</h1>
+      <div class="eyebrow">Admin portal</div>
+      <h1>Markets, results &amp; settings</h1>
     </div>
     <span class="spacer"></span>
     <button class="btn btn-ghost btn-sm" id="reload" type="button">Reload</button>
   </div>
+
+  <nav class="admin-tabs" role="tablist" aria-label="Admin sections">
+    <button type="button" role="tab" data-tab="markets" aria-selected="true">Markets <span class="count" id="count-attn"></span></button>
+    <button type="button" role="tab" data-tab="create">Create market</button>
+    <button type="button" role="tab" data-tab="articles">News articles <span class="count" id="count-articles"></span></button>
+    <button type="button" role="tab" data-tab="ref">Reference data</button>
+    <button type="button" role="tab" data-tab="settings">Settings</button>
+    <button type="button" role="tab" data-tab="activity">Activity</button>
+  </nav>
   <div id="admin-msg" aria-live="polite"></div>
 
-  <div class="section-title"><h2>Awaiting result</h2><span class="count" id="count-results"></span></div>
-  <p class="small muted" style="margin-top:-6px">Matches that have kicked off. Pick what happened and post it: the market settles and pays out straight away.</p>
-  <div id="results"></div>
+  <!-- ============================================================ markets -->
+  <section class="admin-pane" data-pane="markets">
+    <div class="section-title"><h2>Drafts awaiting approval</h2><span class="count" id="count-drafts"></span></div>
+    <div id="drafts"></div>
 
-  <div class="layout" style="margin-top:8px">
-    <div>
-      <div class="section-title"><h2>Upcoming matches</h2><span class="count" id="count-upcoming"></span></div>
-      <div id="upcoming"></div>
-      <div class="section-title"><h2>Recent results</h2></div>
-      <div id="recent"></div>
+    <div class="section-title"><h2>Awaiting result</h2><span class="count" id="count-results"></span></div>
+    <p class="small muted" style="margin-top:-6px">Markets whose close time has passed. Pick what happened and post it: positions settle and pay out straight away.</p>
+    <div id="results"></div>
+
+    <div class="section-title"><h2>All markets</h2><span class="count" id="count-all"></span></div>
+    <div class="toolbar admin-filters">
+      <input class="input input-sm" id="f-search" type="search" placeholder="Search…" aria-label="Search markets">
+      <select class="input input-sm" id="f-status" aria-label="Status">
+        <option value="">Any status</option><option value="open">Open</option><option value="proposed">Draft</option>
+        <option value="closed">Closed</option><option value="resolved">Resolved</option><option value="rejected">Rejected</option>
+      </select>
+      <select class="input input-sm" id="f-kind" aria-label="Type">
+        <option value="">Any type</option><option value="match">Cuppers match</option>
+        <option value="binary">Yes / No</option><option value="multi">Multiple choice</option>
+      </select>
+      <select class="input input-sm" id="f-category" aria-label="Category"><option value="">Any category</option></select>
     </div>
-    <aside>
-      <div class="section-title"><h2>Post a match</h2></div>
-      <form class="card admin-card" id="new-match" novalidate autocomplete="off">
-        <div class="field-grid">
-          <div>
-            <label for="nm-term">Term</label>
-            <input class="input" id="nm-term" value="Michaelmas 2026" required>
-          </div>
-          <div>
-            <label for="nm-round">Round <span class="faint">(optional)</span></label>
-            <input class="input" id="nm-round" placeholder="Group A, Quarter-final…">
-          </div>
+    <div id="all-markets"></div>
+  </section>
+
+  <!-- ============================================================ create -->
+  <section class="admin-pane" data-pane="create" hidden>
+    <div class="layout">
+      <form class="card admin-card" id="create-form" novalidate autocomplete="off">
+        <div class="label" style="margin-top:0">Market type</div>
+        <div class="seg kind-seg" role="radiogroup" aria-label="Market type">
+          <label><input type="radio" name="kind" value="match" checked> Cuppers match</label>
+          <label><input type="radio" name="kind" value="binary"> Yes / No question</label>
+          <label><input type="radio" name="kind" value="multi"> Multiple choice</label>
         </div>
-        <label for="nm-comp">Competition</label>
-        <input class="input" id="nm-comp" list="comp-list" placeholder="Men's Football Cuppers" required>
-        <datalist id="comp-list"></datalist>
+        <div id="from-article" class="msg msg-info" hidden></div>
+
         <div class="field-grid">
-          <div>
-            <label for="nm-home">Home team</label>
-            <input class="input" id="nm-home" placeholder="Keble" required>
-          </div>
-          <div>
-            <label for="nm-away">Away team</label>
-            <input class="input" id="nm-away" placeholder="Worcester" required>
-          </div>
+          <div><label for="c-term">Term</label><select class="input" id="c-term" required></select></div>
+          <div><label for="c-category">Category</label><select class="input" id="c-category" required></select></div>
         </div>
-        <label for="nm-kick">Kick-off <span class="faint">(trading stops then)</span></label>
-        <input class="input" id="nm-kick" type="datetime-local" required>
-        <label class="row" style="color:var(--text);font-weight:550;margin-top:14px;cursor:pointer">
-          <input type="checkbox" id="nm-draw" checked style="width:18px;height:18px;accent-color:var(--accent)"> A draw is a possible result
-        </label>
-        <div class="label">Opening odds (%)</div>
-        <div class="field-grid" id="nm-priors" style="grid-template-columns:repeat(auto-fit,minmax(80px,1fr))"></div>
-        <p class="tiny faint" id="nm-prior-sum" style="margin-top:6px"></p>
-        <label for="nm-criteria">Resolution rules</label>
-        <textarea class="input" id="nm-criteria" rows="3"></textarea>
-        <div id="nm-msg" aria-live="polite"></div>
-        <button class="btn btn-primary btn-block" type="submit" style="margin-top:14px">Post match</button>
+
+        <!-- match -->
+        <div data-kind="match">
+          <div class="field-grid">
+            <div><label for="c-comp">Competition</label><select class="input" id="c-comp" required></select></div>
+            <div><label for="c-round">Round <span class="faint">(optional)</span></label>
+              <input class="input" id="c-round" placeholder="Group A, Quarter-final…"></div>
+          </div>
+          <div class="field-grid">
+            <div><label for="c-home">Home team</label><input class="input" id="c-home" list="team-list" placeholder="Keble" required></div>
+            <div><label for="c-away">Away team</label><input class="input" id="c-away" list="team-list" placeholder="Worcester" required></div>
+          </div>
+          <datalist id="team-list"></datalist>
+          <label class="row check-row"><input type="checkbox" id="c-draw"> A draw is a possible result</label>
+        </div>
+
+        <!-- binary / multi -->
+        <div data-kind="binary multi" hidden>
+          <label for="c-question">Question</label>
+          <input class="input" id="c-question" maxlength="200" placeholder="Will the Greenway cycle route open before Trinity 2027?">
+          <p class="tiny faint" style="margin-top:4px">Ask something that will be clearly answered by public reporting before the close time.</p>
+        </div>
+        <div data-kind="binary" hidden>
+          <label for="c-prior">Opening chance of YES (%)</label>
+          <input class="input" id="c-prior" type="number" min="1" max="99" step="1" value="50" inputmode="numeric">
+        </div>
+        <div data-kind="multi" hidden>
+          <div class="row" style="margin-top:14px"><div class="label" style="margin:0">Outcomes and opening odds (%)</div><span class="spacer"></span>
+            <label class="small muted" for="c-seats">Winners</label>
+            <input class="input input-sm" id="c-seats" type="number" min="1" max="10" value="1" style="width:64px"></div>
+          <div id="c-outcomes" class="outcome-editor"></div>
+          <button type="button" class="btn btn-ghost btn-xs" id="c-add-outcome" style="margin-top:8px">+ Add outcome</button>
+        </div>
+        <div data-kind="match" id="c-priors-box">
+          <div class="label">Opening odds (%)</div>
+          <div class="field-grid" id="c-priors" style="grid-template-columns:repeat(auto-fit,minmax(80px,1fr))"></div>
+        </div>
+        <p class="tiny faint" id="c-prior-sum" style="margin-top:6px"></p>
+
+        <label for="c-close"><span data-kind="match">Kick-off</span><span data-kind="binary multi" hidden>Close time</span> <span class="faint">(trading stops then)</span></label>
+        <input class="input" id="c-close" type="datetime-local" required>
+        <label for="c-desc">Description <span class="faint">(optional)</span></label>
+        <input class="input" id="c-desc" maxlength="300">
+        <label for="c-criteria">Resolution rules</label>
+        <textarea class="input" id="c-criteria" rows="3"></textarea>
+        <div class="field-grid">
+          <div><label for="c-source-name">Source <span class="faint">(optional)</span></label><input class="input" id="c-source-name" placeholder="Cherwell"></div>
+          <div><label for="c-source-url">Source link</label><input class="input" id="c-source-url" type="url" placeholder="https://cherwell.org/…"></div>
+        </div>
+        <div id="c-msg" aria-live="polite"></div>
+        <div class="row" style="margin-top:14px;gap:8px">
+          <button class="btn btn-primary" type="submit" data-status="open">Publish now</button>
+          <button class="btn btn-ghost" type="submit" data-status="proposed">Save as draft</button>
+        </div>
       </form>
-    </aside>
-  </div>
+      <aside>
+        <div class="card card-pad small">
+          <h3 style="margin-top:0">Preview</h3>
+          <div id="c-preview" class="muted"></div>
+          <hr style="border:0;border-top:1px solid var(--border);margin:14px 0">
+          <p class="tiny muted">Published markets open immediately and the house market maker quotes them within ~10 s.
+          Drafts wait in <b>Markets → Drafts</b> until an admin approves them.</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================================================ articles -->
+  <section class="admin-pane" data-pane="articles" hidden>
+    <div class="row">
+      <p class="small muted" style="margin:0">Headlines scraped from Cherwell and The Oxford Student. Turn one into a market, or dismiss it.</p>
+      <span class="spacer"></span>
+      <label class="small muted row" style="gap:6px"><input type="checkbox" id="a-pending" checked> Only unhandled</label>
+      <button class="btn btn-ghost btn-sm" type="button" id="a-scrape">Scrape now</button>
+    </div>
+    <div id="articles" style="margin-top:12px"></div>
+  </section>
+
+  <!-- ============================================================ reference data -->
+  <section class="admin-pane" data-pane="ref" hidden>
+    <div class="row">
+      <div class="seg ref-seg" role="tablist" aria-label="Reference table">
+        <button type="button" data-ref="competitions" aria-selected="true">Competitions</button>
+        <button type="button" data-ref="teams">Teams</button>
+        <button type="button" data-ref="terms">Terms</button>
+        <button type="button" data-ref="categories">Categories</button>
+        <button type="button" data-ref="sports">Sports</button>
+      </div>
+    </div>
+    <p class="small muted" id="ref-help"></p>
+    <div id="ref-table"></div>
+  </section>
+
+  <!-- ============================================================ settings -->
+  <section class="admin-pane" data-pane="settings" hidden>
+    <p class="small muted">Live server settings, stored in the database. Changes take effect within ~30 seconds without a restart.</p>
+    <form id="settings-form" class="card" novalidate>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Setting</th><th>Value</th><th>Last changed</th></tr></thead><tbody id="settings-body"></tbody></table></div>
+      <div class="card-pad row"><span id="settings-msg" aria-live="polite"></span><span class="spacer"></span>
+        <button class="btn btn-primary btn-sm" type="submit">Save changes</button></div>
+    </form>
+  </section>
+
+  <!-- ============================================================ activity -->
+  <section class="admin-pane" data-pane="activity" hidden>
+    <p class="small muted">Every admin action, newest first (stored in the <code>admin_actions</code> hypertable).</p>
+    <div id="activity"></div>
+  </section>
 </main>
-<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers. No real money is involved.</div></footer>
+
+<dialog id="edit-dialog" class="admin-dialog">
+  <form method="dialog" id="edit-form" novalidate>
+    <h3 id="edit-title" style="margin-top:0">Edit market</h3>
+    <label for="e-close">Close time</label><input class="input" id="e-close" type="datetime-local">
+    <label for="e-category">Category</label><select class="input" id="e-category"></select>
+    <label for="e-desc">Description</label><input class="input" id="e-desc" maxlength="300">
+    <label for="e-criteria">Resolution rules</label><textarea class="input" id="e-criteria" rows="3"></textarea>
+    <div class="field-grid">
+      <div><label for="e-source-name">Source</label><input class="input" id="e-source-name"></div>
+      <div><label for="e-source-url">Source link</label><input class="input" id="e-source-url" type="url"></div>
+    </div>
+    <div id="e-msg" aria-live="polite"></div>
+    <div class="row" style="margin-top:14px;gap:8px"><span class="spacer"></span>
+      <button class="btn btn-ghost" value="cancel" type="button" id="e-cancel">Cancel</button>
+      <button class="btn btn-primary" type="submit" id="e-save">Save</button></div>
+  </form>
+</dialog>
+
+<footer class="site-foot"><div class="wrap">OxMarket is a play-money prediction market on Oxford college Cuppers and Oxford news. No real money is involved.</div></footer>
 <script src="js/mock.js"></script>
 <script src="js/api.js"></script>
 <script src="js/common.js"></script>
