@@ -1,4 +1,5 @@
 """The schema matches COLLAB 6 and the Timescale features are configured as intended."""
+import re
 from datetime import timedelta
 
 import pytest
@@ -13,7 +14,7 @@ COLUMNS = {
     "articles": {"id", "source", "url", "title", "summary", "published_at", "scraped_at", "processed"},
     "races": {"id", "election", "position", "seats", "description", "resolution_criteria", "closes_at",
               "status", "source_name", "source_url", "article_id", "ai_reason", "created_by_ai",
-              "created_at", "resolved_at"},
+              "created_at", "resolved_at", "kind", "category"},
     "markets": {"id", "race_id", "candidate", "question", "description", "resolution_criteria",
                 "category", "source_name", "source_url", "article_id", "closes_at", "status", "outcome",
                 "ai_prior", "ai_reason", "created_by_ai", "created_at", "resolved_at"},
@@ -26,8 +27,18 @@ COLUMNS = {
     "portfolio_snapshots": {"time", "user_id", "cash", "equity"},
     "ai_briefs": {"id", "race_id", "market_id", "kind", "suggested_winner_ids", "text",
                   "suggested_outcome", "evidence_url", "confidence", "created_at"},
+    # admin portal: reference data, settings, audit log
+    "categories": {"slug", "name", "sort"},
+    "sports": {"name", "icon", "pattern", "sort"},
+    "competitions": {"id", "name", "sport", "category", "has_draw", "active"},
+    "teams": {"id", "name", "kind", "active"},
+    "terms": {"id", "name", "starts_on", "ends_on"},
+    "settings": {"key", "value", "description", "updated_at", "updated_by"},
+    "admin_actions": {"time", "admin_id", "action", "race_id", "market_id", "details"},
 }
-HYPERTABLES = {"trades", "price_ticks", "portfolio_snapshots"}
+HYPERTABLES = {"trades", "price_ticks", "portfolio_snapshots", "admin_actions"}
+CHUNK = {"trades": timedelta(days=1), "price_ticks": timedelta(days=1),
+         "portfolio_snapshots": timedelta(days=1), "admin_actions": timedelta(days=7)}
 CAGGS = {"candles_5m", "candles_1h"}
 
 
@@ -76,8 +87,11 @@ def test_constraints():
     assert ("races", "u", "UNIQUE (election, \"position\")") in defs or \
            ("races", "u", "UNIQUE (election, position)") in defs
     assert ("markets", "u", "UNIQUE (race_id, candidate)") in defs
+    assert any(t == "races" and k == "c" and "kind" in d and "binary" in d for t, k, d in defs)
     assert ("positions", "p", "PRIMARY KEY (user_id, market_id)") in defs
-    assert any(t == "markets" and k == "f" and "REFERENCES oxmarket.races(id)" in d for t, k, d in defs)
+    # pg_get_constraintdef drops the schema when it is on the search_path
+    assert any(t == "markets" and k == "f" and re.search(r"REFERENCES (oxmarket\.)?races\(id\)", d)
+               for t, k, d in defs)
     # hypertables must not carry a PK/unique without the time column
     for t, k, d in defs:
         if t in HYPERTABLES and k in ("p", "u"):
@@ -93,7 +107,7 @@ def test_hypertables_and_chunk_interval():
     rows = q("""SELECT hypertable_name, time_interval FROM timescaledb_information.dimensions
                 WHERE hypertable_schema = %s AND column_name = 'time'""", (S,))
     assert {r["hypertable_name"] for r in rows} == HYPERTABLES
-    assert all(r["time_interval"] == timedelta(days=1) for r in rows)
+    assert all(r["time_interval"] == CHUNK[r["hypertable_name"]] for r in rows)
 
 
 def test_continuous_aggregates_are_realtime():
@@ -139,7 +153,8 @@ def test_compression_settings():
     try:
         rows = q("""SELECT segmentby, orderby FROM timescaledb_information.hypertable_compression_settings
                     WHERE hypertable = %s::regclass""", (f"{S}.price_ticks",))
-        assert rows and rows[0]["segmentby"] == "market_id" and "time DESC" in rows[0]["orderby"]
+        assert rows and rows[0]["segmentby"] == "market_id" and \
+            "time DESC" in rows[0]["orderby"].replace('"', "")
     except Exception as e:  # older Timescale: per-column view
         if "does not exist" not in str(e):
             raise
@@ -173,3 +188,14 @@ def test_connection_settings():
     with db.pool().connection() as c:
         assert c.execute("SHOW search_path").fetchone()["search_path"].startswith(S)
         assert c.execute("SHOW timezone").fetchone()["TimeZone"] == "UTC"
+
+
+def test_reference_data_and_settings_seeded():
+    assert db.current_term() is not None
+    assert {"cuppers", "news"} <= {r["slug"] for r in db.list_ref("categories")}
+    assert len(db.list_ref("teams")) >= 30
+    comps = {r["name"]: r for r in db.list_ref("competitions")}
+    assert comps["Men's Football Cuppers"]["has_draw"] is True
+    keys = {r["key"] for r in db.all_settings()}
+    assert {"mm.size", "mm.half_spread", "users.starting_cash", "defaults.priors.draw"} <= keys
+    assert isinstance(db.get_setting("mm.size"), int)

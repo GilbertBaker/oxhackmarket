@@ -14,6 +14,7 @@ from pathlib import Path
 
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 log = logging.getLogger("db")
@@ -45,9 +46,12 @@ def pool():
         with _pool_lock:
             if _pool is None:
                 _pool = ConnectionPool(
-                    _conninfo(), min_size=1, max_size=10, open=True,
-                    check=ConnectionPool.check_connection, max_idle=300,
-                    kwargs={"row_factory": dict_row,
+                    # autocommit: a lone query is one round trip (no BEGIN/COMMIT), ~3.5x faster
+                    # against the cloud DB. transaction() still sends an explicit BEGIN.
+                    # No per-checkout check (another round trip); idle connections are
+                    # recycled after 2 min instead, before the cloud proxy drops them.
+                    _conninfo(), min_size=1, max_size=10, open=True, max_idle=120,
+                    kwargs={"row_factory": dict_row, "autocommit": True,
                             "options": f"-c search_path={SCHEMA},public -c timezone=UTC"})
     return _pool
 
@@ -232,9 +236,13 @@ def ensure_bot_user(conn=None):
 
 # ---------------------------------------------------------------- users
 
-def create_user(username, pw_hash, is_admin=False, conn=None):
-    return _one(f"""INSERT INTO {SCHEMA}.users (username, pw_hash, is_admin)
-                    VALUES (%s, %s, %s) RETURNING *""", (username, pw_hash, is_admin), conn)
+def create_user(username, pw_hash, is_admin=False, cash=None, conn=None):
+    """cash None = the column default (100000p); register passes users.starting_cash."""
+    if cash is None:
+        return _one(f"""INSERT INTO {SCHEMA}.users (username, pw_hash, is_admin)
+                        VALUES (%s, %s, %s) RETURNING *""", (username, pw_hash, is_admin), conn)
+    return _one(f"""INSERT INTO {SCHEMA}.users (username, pw_hash, is_admin, cash)
+                    VALUES (%s, %s, %s, %s) RETURNING *""", (username, pw_hash, is_admin, int(cash)), conn)
 
 
 def get_user(user_id, conn=None):
@@ -258,7 +266,8 @@ def list_users(include_bots=False, conn=None):
 
 RACE_COLS = {"election", "position", "seats", "description", "resolution_criteria", "closes_at",
              "status", "source_name", "source_url", "article_id", "ai_reason", "created_by_ai",
-             "created_at", "resolved_at"}
+             "created_at", "resolved_at", "kind", "category"}
+RACE_KINDS = ("match", "multi", "binary")
 
 
 def create_race(fields, conn=None):
@@ -275,8 +284,8 @@ def find_race(election, position, conn=None):
 
 
 def list_races(status=None, conn=None):
-    """status None or 'all' = every race. Ordered by closes_at, then position order."""
-    if status in (None, "all"):
+    """status None, 'all' or 'any' = every race. Ordered by closes_at, then position order."""
+    if status in (None, "all", "any"):
         where, params = "", None
     elif isinstance(status, (list, tuple, set)):
         where, params = "WHERE status = ANY(%s)", (list(status),)
@@ -388,6 +397,17 @@ def mark_article_processed(id, conn=None):
     _exec(f"UPDATE {SCHEMA}.articles SET processed = true WHERE id = %s", (id,), conn)
 
 
+def admin_articles(limit=60, pending_only=False, conn=None):
+    """Newest articles for the admin queue, each with race_ids = races made from it.
+    pending_only = not yet processed (no market made, not dismissed)."""
+    cond = "WHERE NOT a.processed" if pending_only else ""
+    return _all(f"""SELECT a.*, COALESCE((SELECT array_agg(r.id ORDER BY r.id) FROM {SCHEMA}.races r
+                                          WHERE r.article_id = a.id), '{{}}') AS race_ids
+                    FROM {SCHEMA}.articles a {cond}
+                    ORDER BY COALESCE(a.published_at, a.scraped_at) DESC, a.id DESC LIMIT %s""",
+                (limit,), conn)
+
+
 def recent_articles(limit=20, before=None, conn=None):
     """Newest first by published_at (scraped_at if unknown); before = only those <= before."""
     cond, params = "", {"limit": limit}
@@ -488,6 +508,42 @@ def record_tick(market_id, best_bid, best_ask, last_price, conn=None, time=None)
 def last_tick(market_id, conn=None):
     return _one(f"""SELECT * FROM {SCHEMA}.price_ticks WHERE market_id = %s
                     ORDER BY time DESC LIMIT 1""", (market_id,), conn)
+
+
+def record_ticks(rows, conn=None):
+    """Batch insert price_ticks: rows = [(time, market_id, best_bid, best_ask, last_price)]."""
+    if not rows:
+        return
+    with _use(conn) as c:
+        with c.cursor() as cur:
+            cur.executemany(f"""INSERT INTO {SCHEMA}.price_ticks (time, market_id, best_bid, best_ask, last_price)
+                                VALUES (%s, %s, %s, %s, %s)""", rows)
+
+
+def latest_ticks(market_ids, conn=None):
+    """{market_id: newest price_tick row} in one query (LATERAL, uses the (market_id, time) index)."""
+    rows = _all(f"""SELECT t.* FROM unnest(%s::int[]) AS ids(id)
+                    CROSS JOIN LATERAL (SELECT * FROM {SCHEMA}.price_ticks pt WHERE pt.market_id = ids.id
+                                        ORDER BY pt.time DESC LIMIT 1) t""", (list(market_ids),), conn)
+    return {r["market_id"]: r for r in rows}
+
+
+def last_trade_prices(market_ids, conn=None):
+    """{market_id: last trade price} for the markets that have traded, in one query."""
+    rows = _all(f"""SELECT ids.id AS market_id, t.price FROM unnest(%s::int[]) AS ids(id)
+                    CROSS JOIN LATERAL (SELECT price FROM {SCHEMA}.trades tr WHERE tr.market_id = ids.id
+                                        ORDER BY tr.time DESC LIMIT 1) t""", (list(market_ids),), conn)
+    return {r["market_id"]: r["price"] for r in rows}
+
+
+def insert_portfolio_snapshots(rows, conn=None):
+    """Batch insert: rows = [(time, user_id, cash, equity)]."""
+    if not rows:
+        return
+    with _use(conn) as c:
+        with c.cursor() as cur:
+            cur.executemany(f"""INSERT INTO {SCHEMA}.portfolio_snapshots (time, user_id, cash, equity)
+                                VALUES (%s, %s, %s, %s)""", rows)
 
 
 def insert_portfolio_snapshot(user_id, cash, equity, conn=None, time=None):
@@ -615,7 +671,9 @@ def price_history(market_id, bucket, since, conn=None):
         r = candles.get(t) or {}
         close = r.get("close")
         if close is None:
-            close = prev_close if prev_close is not None else fallback.get(t)
+            # no candle: the gap-filled trade + tick series for this bucket, else carry forward
+            fb = fallback.get(t)
+            close = fb if fb is not None else prev_close
         prev_close = close if close is not None else prev_close
         has_trades = r.get("open") is not None
         points.append({
@@ -699,6 +757,17 @@ def equity(user_id, conn=None):
     return int(row["equity"]) if row else 0
 
 
+def all_equity(include_bots=False, conn=None):
+    """[(user row, equity)] for every user in one query (same formula as equity())."""
+    where = "" if include_bots else "WHERE NOT u.is_bot"
+    rows = _all(f"""SELECT u.*, u.cash + COALESCE((
+                        SELECT sum(p.qty * {_price_expr('m')})
+                        FROM {SCHEMA}.positions p JOIN {SCHEMA}.markets m ON m.id = p.market_id
+                        WHERE p.user_id = u.id AND p.qty <> 0), 0)::bigint AS equity
+                    FROM {SCHEMA}.users u {where} ORDER BY u.id""", None, conn)
+    return [(r, int(r["equity"])) for r in rows]
+
+
 def leaderboard(limit=20, conn=None):
     """[{"rank", "user_id", "username", "equity"}] for non-bot users, richest first."""
     rows = _all(f"""SELECT u.id AS user_id, u.username, u.cash + COALESCE((
@@ -772,3 +841,153 @@ def timescale_stats(conn=None):
             UNION ALL SELECT 'portfolio_snapshots', count(*) FROM {SCHEMA}.portfolio_snapshots""").fetchall()}
     return {"hypertables": hts, "compression": comp, "continuous_aggregates": caggs,
             "jobs": jobs, "rows": rows}
+
+
+def refresh_candles(start, end=None, conn=None):
+    """Materialise candles_5m and candles_1h over [start, end] (default now).
+    Needed after back-dated inserts (seed history, tests): those land in windows the
+    refresh policy has already materialised. Must run outside a transaction."""
+    end = end or utcnow()
+    with _use(conn) as c:
+        if not c.autocommit or c.info.transaction_status != 0:
+            raise RuntimeError("refresh_candles needs an autocommit connection outside a transaction")
+        for view, width in (("candles_5m", timedelta(minutes=5)), ("candles_1h", timedelta(hours=1))):
+            lo = _floor(parse_iso(start), width)
+            hi = _floor(parse_iso(end), width) + width
+            c.execute(sql.SQL("CALL refresh_continuous_aggregate({}, %s, %s)").format(
+                sql.Literal(f"{SCHEMA}.{view}")), (lo, hi))
+
+
+def _floor(t, width):
+    epoch = datetime(2000, 1, 3, tzinfo=timezone.utc)   # time_bucket's default origin (a Monday)
+    return epoch + ((t - epoch) // width) * width
+
+
+# ---------------------------------------------------------------- settings
+# Runtime knobs in oxmarket.settings (seeded by schema.sql). Reads are cached for
+# SETTINGS_TTL seconds so the hot loops (MM bot, jobs) don't pay a round trip each time.
+
+SETTINGS_TTL = 30
+_settings_cache = {"at": None, "values": {}}
+_settings_lock = threading.Lock()
+
+
+def all_settings(conn=None):
+    return _all(f"SELECT key, value, description, updated_at, updated_by FROM {SCHEMA}.settings ORDER BY key",
+                None, conn)
+
+
+def get_setting(key, default=None):
+    """Cached value of one setting; default if missing or the DB is unreachable."""
+    now = utcnow()
+    with _settings_lock:
+        at = _settings_cache["at"]
+        fresh = at is not None and (now - at).total_seconds() < SETTINGS_TTL
+    if not fresh:
+        try:
+            values = {r["key"]: r["value"] for r in all_settings()}
+        except Exception:
+            log.warning("settings unavailable, using defaults", exc_info=True)
+            values = None
+        with _settings_lock:
+            if values is not None:
+                _settings_cache["values"] = values
+            _settings_cache["at"] = now
+    with _settings_lock:
+        return _settings_cache["values"].get(key, default)
+
+
+def set_setting(key, value, user_id=None, conn=None):
+    """Update an existing setting (unknown keys are refused: returns None). Returns the row."""
+    row = _one(f"""UPDATE {SCHEMA}.settings SET value = %s, updated_at = now(), updated_by = %s
+                   WHERE key = %s RETURNING key, value, description, updated_at, updated_by""",
+               (Jsonb(value), user_id, key), conn)
+    with _settings_lock:
+        _settings_cache["at"] = None
+    return row
+
+
+# ---------------------------------------------------------------- reference data
+# categories / sports / competitions / teams / terms, managed in the admin portal.
+
+REF_TABLES = {
+    "categories": {"key": "slug", "cols": {"slug", "name", "sort"}, "order": "sort, name"},
+    "sports": {"key": "name", "cols": {"name", "icon", "pattern", "sort"}, "order": "sort, name"},
+    "competitions": {"key": "id", "cols": {"name", "sport", "category", "has_draw", "active"},
+                     "order": "active DESC, name"},
+    "teams": {"key": "id", "cols": {"name", "kind", "active"}, "order": "active DESC, name"},
+    "terms": {"key": "id", "cols": {"name", "starts_on", "ends_on"}, "order": "starts_on"},
+}
+
+
+def _ref(table):
+    if table not in REF_TABLES:
+        raise ValueError(f"unknown reference table {table!r}")
+    return REF_TABLES[table]
+
+
+def list_ref(table, active_only=False, conn=None):
+    spec = _ref(table)
+    where = "WHERE active" if active_only and "active" in spec["cols"] else ""
+    return _all(f"SELECT * FROM {SCHEMA}.{table} {where} ORDER BY {spec['order']}", None, conn)
+
+
+def get_ref(table, key, conn=None):
+    spec = _ref(table)
+    return _one(sql.SQL("SELECT * FROM {}.{} WHERE {} = %s").format(
+        sql.Identifier(SCHEMA), sql.Identifier(table), sql.Identifier(spec["key"])), (key,), conn)
+
+
+def insert_ref(table, fields, conn=None):
+    spec = _ref(table)
+    cols = [k for k in fields if k in spec["cols"]]
+    if not cols:
+        raise ValueError("no columns given")
+    q = sql.SQL("INSERT INTO {}.{} ({}) VALUES ({}) RETURNING *").format(
+        sql.Identifier(SCHEMA), sql.Identifier(table),
+        sql.SQL(", ").join(map(sql.Identifier, cols)),
+        sql.SQL(", ").join(sql.Placeholder(c) for c in cols))
+    return _one(q, {c: fields[c] for c in cols}, conn)
+
+
+def update_ref(table, key, fields, conn=None):
+    spec = _ref(table)
+    bad = set(fields) - spec["cols"]
+    if bad:
+        raise ValueError(f"cannot update {table} columns: {sorted(bad)}")
+    if not fields:
+        return get_ref(table, key, conn)
+    q = sql.SQL("UPDATE {}.{} SET {} WHERE {} = %(_key)s RETURNING *").format(
+        sql.Identifier(SCHEMA), sql.Identifier(table),
+        sql.SQL(", ").join(sql.SQL("{} = {}").format(sql.Identifier(k), sql.Placeholder(k)) for k in fields),
+        sql.Identifier(spec["key"]))
+    return _one(q, {**fields, "_key": key}, conn)
+
+
+def current_term(at=None, conn=None):
+    """The term whose dates contain `at` (default now), else the next one, else the latest."""
+    d = (at or utcnow()).date()
+    return (_one(f"""SELECT * FROM {SCHEMA}.terms WHERE %(d)s BETWEEN starts_on AND ends_on
+                     ORDER BY starts_on DESC LIMIT 1""", {"d": d}, conn)
+            or _one(f"SELECT * FROM {SCHEMA}.terms WHERE starts_on > %(d)s ORDER BY starts_on LIMIT 1",
+                    {"d": d}, conn)
+            or _one(f"SELECT * FROM {SCHEMA}.terms ORDER BY starts_on DESC LIMIT 1", None, conn))
+
+
+# ---------------------------------------------------------------- admin audit log (hypertable)
+
+def log_admin_action(admin_id, action, race_id=None, market_id=None, details=None, conn=None):
+    _exec(f"""INSERT INTO {SCHEMA}.admin_actions (admin_id, action, race_id, market_id, details)
+              VALUES (%s, %s, %s, %s, %s)""",
+          (admin_id, action, race_id, market_id, Jsonb(details) if details is not None else None), conn)
+
+
+def recent_admin_actions(limit=100, race_id=None, conn=None):
+    cond, params = "", {"limit": limit}
+    if race_id is not None:
+        cond, params["race_id"] = "WHERE a.race_id = %(race_id)s", race_id
+    return _all(f"""SELECT a.*, u.username AS admin, r.position AS race_position
+                    FROM {SCHEMA}.admin_actions a
+                    LEFT JOIN {SCHEMA}.users u ON u.id = a.admin_id
+                    LEFT JOIN {SCHEMA}.races r ON r.id = a.race_id
+                    {cond} ORDER BY a.time DESC LIMIT %(limit)s""", params, conn)

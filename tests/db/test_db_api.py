@@ -7,7 +7,7 @@ from flask import Flask
 
 import data_api
 import db
-from conftest import RON, trade
+from conftest import RON, refresh_candles, trade
 
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 USER_KEYS = {"id", "username", "cash", "available", "is_admin"}
@@ -79,6 +79,7 @@ def race(make_race, house, make_user):
     now = db.utcnow()
     trade(r["markets"]["Bob"], 30, 4, now - timedelta(hours=30), u["id"], house)
     trade(r["markets"]["Bob"], 62, 5, now - timedelta(hours=2), u["id"], house)
+    refresh_candles(now - timedelta(hours=31))
     return r
 
 
@@ -184,7 +185,8 @@ def test_leaderboard_endpoints(client, tag):
 
 def test_stats(client):
     body = client.get("/api/stats").get_json()
-    assert {h["name"] for h in body["hypertables"]} == {"trades", "price_ticks", "portfolio_snapshots"}
+    assert {h["name"] for h in body["hypertables"]} == {"trades", "price_ticks", "portfolio_snapshots",
+                                                        "admin_actions"}
     assert {c["name"] for c in body["continuous_aggregates"]} == {"candles_5m", "candles_1h"}
     assert all(c["realtime"] for c in body["continuous_aggregates"])
     assert len(body["jobs"]) == 4

@@ -37,6 +37,7 @@ log = logging.getLogger("app")
 from flask import Flask, jsonify, request  # noqa: E402
 
 import content  # noqa: E402
+import admin_api  # noqa: E402
 import content_api  # noqa: E402
 import data_api  # noqa: E402
 import db  # noqa: E402
@@ -68,6 +69,7 @@ def create_app():
     app.register_blueprint(trading_api.bp)
     app.register_blueprint(data_api.bp)
     app.register_blueprint(content_api.bp)
+    admin_api.init_app(app)
 
     @app.errorhandler(404)
     def not_found(e):

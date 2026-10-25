@@ -64,6 +64,12 @@ def user_json(user):
             "available": int(available), "is_admin": bool(user["is_admin"])}
 
 
+def _starting_cash():
+    """users.starting_cash setting (pence); None = the column default."""
+    v = db.get_setting("users.starting_cash") if hasattr(db, "get_setting") else None
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
 def _admin_usernames():
     return {u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "").split(",") if u.strip()}
 
@@ -104,6 +110,7 @@ def race_json(race, markets=None, with_candidates=True):
     out = {
         "id": race["id"], "election": race["election"], "position": race["position"],
         "seats": race["seats"], "description": race.get("description"),
+        "kind": race.get("kind") or "match", "category": race.get("category") or "cuppers",
         "closes_at": db.iso(race["closes_at"]), "status": race["status"],
         "source_name": race.get("source_name"), "source_url": race.get("source_url"),
         "resolution_criteria": race["resolution_criteria"],
@@ -163,7 +170,8 @@ def register():
         return _err("username already taken")
     try:
         user = db.create_user(username, generate_password_hash(password),
-                              is_admin=username.lower() in _admin_usernames())
+                              is_admin=username.lower() in _admin_usernames(),
+                              cash=_starting_cash())
     except Exception:
         log.exception("create_user failed")
         return _err("username already taken")

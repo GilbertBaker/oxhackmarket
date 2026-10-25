@@ -1,6 +1,6 @@
-"""Gemini text for Cuppers matches (owner C): per-match "why did the odds move" briefs
-and the daily digest. Matches and results are entered by hand, so there is no
-extraction or result detection here.
+"""Gemini (owner C): per-match "why did the odds move" briefs, the daily digest, and
+market proposals from scraped Cherwell / Oxford Student articles (propose_market). Proposals
+land as status 'proposed' races in the admin approval queue; nothing goes live unreviewed.
 
 FAKE_AI=1 (or no GEMINI_API_KEY) returns deterministic text and never touches the network.
 """
@@ -118,3 +118,59 @@ def daily_digest(races):
         c, r = max(movers, key=lambda x: abs(x[0]["change"]))
         text += f" Biggest mover: {_label(c['candidate'])} in {_split_position(r['position'])[1]} ({c['change']:+d} points)."
     return text
+
+
+PROPOSE_PROMPT = """You turn Oxford student news into questions for a PLAY-MONEY prediction
+market used by Oxford students. Given one article (headline + summary), either propose ONE
+question whose answer will be publicly known within 1 to 120 days, or reply with null.
+
+Rules:
+- The question must resolve unambiguously from public reporting (Cherwell, The Oxford Student,
+  official University / college / Union / council announcements).
+- Never make markets about named private individuals (students, junior staff), their health,
+  crimes, discipline or personal lives. Public office holders acting in their role are fine.
+- No markets on deaths, injuries, violence or anything distressing.
+- Prefer yes/no questions ("kind": "binary"). Use "multi" only for a clear set of 2-6 options
+  (e.g. candidates in an announced election); then list them in "outcomes".
+- closes_at is when trading should stop (ISO 8601 UTC), before the answer is known.
+- prior is your honest probability (1-99) that the answer is YES (binary), or per outcome.
+- If the article is opinion, a review, a poem or has no forward-looking event, return null.
+
+Today (UTC): {today}
+Source: {source}
+Headline: {title}
+Summary: {summary}
+
+Reply with JSON only: null, or
+{{"question": str, "kind": "binary"|"multi", "outcomes": [{{"name": str, "prior": int}}] (multi only),
+  "prior": int (binary only), "closes_at": str, "resolution_criteria": str, "category":
+  "news"|"university"|"union"|"cuppers", "reason": str}}
+"""
+
+
+def _json_reply(text):
+    import json
+    import re
+    if not text:
+        return None
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        log.warning("gemini proposal was not JSON: %.200s", text)
+        return None
+
+
+def propose_market(article):
+    """article row -> a market proposal dict (see PROPOSE_PROMPT) or None.
+    Without Gemini (FAKE_AI=1 / no key) returns None: an admin turns articles into markets
+    by hand from the portal's Articles tab."""
+    if _fake():
+        return None
+    text = _generate("propose", PROPOSE_PROMPT.format(
+        today=time.strftime("%Y-%m-%d", time.gmtime()), source=article.get("source"),
+        title=article.get("title"), summary=article.get("summary") or ""))
+    data = _json_reply(text)
+    if not isinstance(data, dict) or not data.get("question"):
+        return None
+    return data

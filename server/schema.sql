@@ -205,3 +205,141 @@ END $$;
 
 SELECT add_compression_policy('oxmarket.price_ticks', INTERVAL '1 day', if_not_exists => TRUE);
 SELECT add_retention_policy('oxmarket.price_ticks', INTERVAL '90 days', if_not_exists => TRUE);
+
+-- ---------------------------------------------------------------- market kinds
+-- kind: 'match'  = Cuppers fixture (Home / Draw / Away outcomes, normalised to 100),
+--       'multi'  = any multi-outcome event (exactly `seats` winners),
+--       'binary' = one YES/NO question (a single market named 'Yes', never normalised).
+
+ALTER TABLE oxmarket.races ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'match';
+ALTER TABLE oxmarket.races ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'cuppers';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'races_kind_check'
+                   AND connamespace = 'oxmarket'::regnamespace) THEN
+        ALTER TABLE oxmarket.races ADD CONSTRAINT races_kind_check
+            CHECK (kind IN ('match', 'multi', 'binary'));
+    END IF;
+END $$;
+
+-- ---------------------------------------------------------------- reference data
+-- Edited from the admin portal. The seed rows below are only inserted when missing.
+
+CREATE TABLE IF NOT EXISTS oxmarket.categories (
+    slug  text PRIMARY KEY,
+    name  text NOT NULL,
+    sort  int NOT NULL DEFAULT 100
+);
+INSERT INTO oxmarket.categories (slug, name, sort) VALUES
+    ('cuppers', 'Cuppers', 10), ('news', 'Oxford news', 20), ('union', 'Oxford Union', 30),
+    ('university', 'University', 40), ('other', 'Other', 90)
+ON CONFLICT (slug) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS oxmarket.sports (
+    name     text PRIMARY KEY,
+    icon     text NOT NULL,
+    pattern  text NOT NULL,
+    sort     int NOT NULL DEFAULT 100
+);
+INSERT INTO oxmarket.sports (name, icon, pattern, sort) VALUES
+    ('Football', '⚽', 'football|soccer|futsal', 10), ('Rugby', '🏉', 'rugby', 20),
+    ('Hockey', '🏑', 'hockey', 30), ('Netball', '🏐', 'netball', 40),
+    ('Lacrosse', '🥍', 'lacrosse', 50), ('Rowing', '🚣', 'rowing|regatta|torpids|eights', 60),
+    ('Cricket', '🏏', 'cricket', 70), ('Basketball', '🏀', 'basketball', 80),
+    ('Tennis', '🎾', 'tennis', 90), ('Badminton', '🏸', 'badminton', 100),
+    ('Volleyball', '🏐', 'volleyball', 110), ('Ultimate', '🥏', 'ultimate|frisbee', 120),
+    ('Squash', '🎾', 'squash', 130), ('Darts', '🎯', 'darts', 140),
+    ('Pool', '🎱', 'pool|snooker', 150), ('Chess', '♟️', 'chess', 160)
+ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS oxmarket.competitions (
+    id        serial PRIMARY KEY,
+    name      text UNIQUE NOT NULL,
+    sport     text NULL REFERENCES oxmarket.sports(name) ON UPDATE CASCADE,
+    category  text NOT NULL DEFAULT 'cuppers' REFERENCES oxmarket.categories(slug) ON UPDATE CASCADE,
+    has_draw  boolean NOT NULL DEFAULT false,
+    active    boolean NOT NULL DEFAULT true
+);
+INSERT INTO oxmarket.competitions (name, sport, has_draw) VALUES
+    ('Men''s Football Cuppers', 'Football', true), ('Women''s Football Cuppers', 'Football', true),
+    ('Men''s Rugby Cuppers', 'Rugby', false), ('Women''s Rugby Cuppers', 'Rugby', false),
+    ('Men''s Hockey Cuppers', 'Hockey', true), ('Mixed Hockey Cuppers', 'Hockey', true),
+    ('Mixed Netball Cuppers', 'Netball', false), ('Mixed Lacrosse Cuppers', 'Lacrosse', false),
+    ('Basketball Cuppers', 'Basketball', false), ('Badminton Cuppers', 'Badminton', false),
+    ('Squash Cuppers', 'Squash', false), ('Ultimate Cuppers', 'Ultimate', false),
+    ('Chess Cuppers', 'Chess', true), ('Darts Cuppers', 'Darts', false)
+ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS oxmarket.teams (
+    id      serial PRIMARY KEY,
+    name    text UNIQUE NOT NULL,
+    kind    text NOT NULL DEFAULT 'college',
+    active  boolean NOT NULL DEFAULT true
+);
+INSERT INTO oxmarket.teams (name) VALUES
+    ('Balliol'), ('Blackfriars'), ('Brasenose'), ('Campion Hall'), ('Christ Church'),
+    ('Corpus Christi'), ('Exeter'), ('Green Templeton'), ('Harris Manchester'), ('Hertford'),
+    ('Jesus'), ('Keble'), ('Kellogg'), ('Lady Margaret Hall'), ('Linacre'), ('Lincoln'),
+    ('Magdalen'), ('Mansfield'), ('Merton'), ('New College'), ('Nuffield'), ('Oriel'),
+    ('Pembroke'), ('Queen''s'), ('Regent''s Park'), ('Reuben'), ('Somerville'), ('St Anne''s'),
+    ('St Antony''s'), ('St Catherine''s'), ('St Cross'), ('St Edmund Hall'), ('St Hilda''s'),
+    ('St Hugh''s'), ('St John''s'), ('St Peter''s'), ('St Stephen''s House'), ('Trinity'),
+    ('University'), ('Wadham'), ('Wolfson'), ('Worcester'), ('Wycliffe Hall')
+ON CONFLICT (name) DO NOTHING;
+
+-- name is also the races.election value, e.g. 'Michaelmas 2026'
+CREATE TABLE IF NOT EXISTS oxmarket.terms (
+    id         serial PRIMARY KEY,
+    name       text UNIQUE NOT NULL,
+    starts_on  date NOT NULL,
+    ends_on    date NOT NULL
+);
+INSERT INTO oxmarket.terms (name, starts_on, ends_on) VALUES
+    ('Trinity 2026', '2026-04-01', '2026-09-30'),
+    ('Michaelmas 2026', '2026-10-01', '2026-12-31'),
+    ('Hilary 2027', '2027-01-01', '2027-03-31'),
+    ('Trinity 2027', '2027-04-01', '2027-09-30')
+ON CONFLICT (name) DO NOTHING;
+
+-- ---------------------------------------------------------------- settings
+-- Runtime knobs read by the server (cached for ~30 s), editable in the admin portal.
+
+CREATE TABLE IF NOT EXISTS oxmarket.settings (
+    key          text PRIMARY KEY,
+    value        jsonb NOT NULL,
+    description  text,
+    updated_at   timestamptz DEFAULT now(),
+    updated_by   int NULL REFERENCES oxmarket.users(id)
+);
+INSERT INTO oxmarket.settings (key, value, description) VALUES
+    ('mm.interval', '10', 'Market maker: seconds between requote passes'),
+    ('mm.size', '50', 'Market maker: shares quoted on each side'),
+    ('mm.half_spread', '2', 'Market maker: pence either side of fair value'),
+    ('mm.alpha', '0.3', 'Market maker: EMA weight of each new trade price'),
+    ('mm.prior_pull', '0.1', 'Market maker: pull of fair value back towards the prior'),
+    ('jobs.tick_seconds', '15', 'Seconds between price tick snapshots'),
+    ('jobs.autoclose_seconds', '60', 'Seconds between checks for markets past their close time'),
+    ('jobs.portfolio_seconds', '300', 'Seconds between portfolio equity snapshots'),
+    ('content.brief_cooldown_seconds', '600', 'Minimum seconds between on-demand Gemini briefs per race'),
+    ('content.scrape_minutes', '30', 'Minutes between Cherwell and Oxford Student feed scrapes'),
+    ('users.starting_cash', '100000', 'Play money in pence given to each new account'),
+    ('defaults.criteria.match', '"Resolves on the full-time result as confirmed by the competition organisers or Oxford University Sport. The winning outcome resolves YES, every other outcome NO."', 'Default resolution rules for Cuppers matches'),
+    ('defaults.criteria.generic', '"Resolves by admin decision based on reporting in Cherwell or The Oxford Student, or on official University or Union announcements."', 'Default resolution rules for other markets'),
+    ('defaults.priors.draw', '[40, 25, 35]', 'Default Home / Draw / Away opening odds'),
+    ('defaults.priors.no_draw', '[50, 50]', 'Default Home / Away opening odds')
+ON CONFLICT (key) DO NOTHING;
+
+-- ---------------------------------------------------------------- admin audit log
+-- Every admin action (create, edit, approve, close, resolve, settings) as a time series.
+
+CREATE TABLE IF NOT EXISTS oxmarket.admin_actions (
+    time       timestamptz NOT NULL DEFAULT now(),
+    admin_id   int NULL,
+    action     text NOT NULL,
+    race_id    int NULL,
+    market_id  int NULL,
+    details    jsonb NULL
+);
+SELECT create_hypertable('oxmarket.admin_actions', 'time',
+                         chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS admin_actions_race_time_idx ON oxmarket.admin_actions (race_id, time DESC);

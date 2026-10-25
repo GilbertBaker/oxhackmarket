@@ -390,9 +390,14 @@ def resolve_race(race_id, winner_market_ids):
         for w in winners:
             if w not in by_id:
                 raise TradingError(f"Market {w} is not in this race")
-        ron_only = len(winners) == 1 and _is_ron(by_id[winners[0]])
-        if len(winners) != int(race["seats"]) and not ron_only:
-            raise TradingError(f"Need exactly {race['seats']} winner(s), got {len(winners)}")
+        if race.get("kind") == "binary":
+            # one 'Yes' market: winners [its id] = YES, [] = NO
+            if len(winners) > 1:
+                raise TradingError("A yes/no market has at most one winner")
+        else:
+            ron_only = len(winners) == 1 and _is_ron(by_id[winners[0]])
+            if len(winners) != int(race["seats"]) and not ron_only:
+                raise TradingError(f"Need exactly {race['seats']} winner(s), got {len(winners)}")
 
         close_race(race_id, conn=conn)
         for m in markets:
@@ -422,7 +427,13 @@ def parse_match(position):
     return (m["comp"].strip(), m["home"].strip(), m["away"].strip()) if m else None
 
 
-def question_for(candidate, position, election):
+def question_for(candidate, position, election, kind=None):
+    """Question text for one outcome market. kind 'binary': the position IS the question.
+    'multi': '<position>: <candidate>?'. 'match' / None: Cuppers or Union wording."""
+    if kind == "binary":
+        return position
+    if kind == "multi":
+        return f"{position.rstrip('?').rstrip()}: {candidate}?"
     match = parse_match(position)
     if match:
         comp, home, away = match
@@ -452,9 +463,10 @@ def add_candidate(race_id, name, prior=None, conn=None, **extra):
         if prior is not None:
             prior = max(1, min(99, int(prior)))
         fields = {"race_id": race_id, "candidate": name,
-                  "question": question_for(name, race["position"], race["election"]),
+                  "question": question_for(name, race["position"], race["election"], race.get("kind")),
                   "resolution_criteria": race["resolution_criteria"],
-                  "category": "cuppers" if parse_match(race["position"]) else "union",
+                  "category": race.get("category")
+                  or ("cuppers" if parse_match(race["position"]) else "union"),
                   "closes_at": race["closes_at"], "status": race["status"], "ai_prior": prior,
                   "source_name": race.get("source_name"), "source_url": race.get("source_url"),
                   "article_id": race.get("article_id")}
@@ -465,16 +477,32 @@ def add_candidate(race_id, name, prior=None, conn=None, **extra):
     return market_id
 
 
-def create_race(election, position, closes_at, resolution_criteria, candidates, seats=1,
-                status="open", add_ron=False, **extra):
+BINARY_NAME = "Yes"
+
+
+def create_race(election, position, closes_at, resolution_criteria, candidates=None, seats=1,
+                status="open", add_ron=False, kind="match", category=None, **extra):
     """One call to make a whole race in ONE transaction: the race row, one market per
     candidate (question text + category derived from the position), and (if status ==
     'open') the engine books. candidates = [{"name", "prior"}] or [names].
     Cuppers (COLLAB 14): position "<Competition>: <Home> vs <Away>", candidates Home /
     Draw / Away, no RON. add_ron=True restores the old Union-election behaviour.
+    kind: 'match' (default), 'multi' (any named outcomes, `seats` winners) or 'binary' (one
+    YES/NO question: a single market named 'Yes'; candidates may be omitted or give its prior).
+    category: races/markets category (default 'cuppers' for a parseable match, else 'other').
     extra = any other races column (description, source_name, ...). Returns the race id."""
     if status not in ("proposed", "open"):
         raise TradingError("status must be proposed or open")
+    if kind not in ("match", "multi", "binary"):
+        raise TradingError("kind must be match, multi or binary")
+    if kind == "binary":
+        given = [c if isinstance(c, dict) else {"name": c} for c in (candidates or [])]
+        if len(given) > 1:
+            raise TradingError("A yes/no market has exactly one outcome")
+        candidates = [{"name": BINARY_NAME, "prior": given[0].get("prior") if given else 50}]
+        seats, add_ron = 1, False
+    if category is None:
+        category = "cuppers" if kind == "match" and parse_match(position) else "other"
     if not candidates:
         raise TradingError("At least one candidate required")
     seats = int(seats)
@@ -488,7 +516,7 @@ def create_race(election, position, closes_at, resolution_criteria, candidates, 
         cands.append({"name": RON_NAME, "prior": RON_PRIOR})
     fields = {"election": election, "position": position, "seats": seats,
               "closes_at": _parse_time(closes_at), "resolution_criteria": resolution_criteria,
-              "status": status}
+              "status": status, "kind": kind, "category": category}
     fields.update(extra)
     with db.transaction() as conn:
         existing = db.find_race(election, position, conn=conn)
@@ -513,6 +541,43 @@ def approve_race(race_id):
         raise TradingError(f"Race is {race['status']}")
     db.update_race(race_id, status="open")
     open_race(race_id)
+
+
+def create_race_from_spec(spec, article=None, status="proposed", created_by_ai=False):
+    """A market proposal ({question, kind, prior | outcomes, closes_at, resolution_criteria,
+    category, reason}, e.g. from ai.propose_market) -> race id, in the current term and
+    linked to its source article. Raises TradingError on a bad spec."""
+    kind = spec.get("kind") or "binary"
+    question = str(spec.get("question") or "").strip()
+    if not question:
+        raise TradingError("question required")
+    try:
+        closes_at = _parse_time(spec.get("closes_at"))
+    except (TypeError, ValueError):
+        raise TradingError("closes_at must be an ISO timestamp")
+    if closes_at is None:
+        raise TradingError("closes_at required")
+    if closes_at.tzinfo is None:
+        closes_at = closes_at.replace(tzinfo=timezone.utc)
+    if closes_at <= _now():
+        raise TradingError("closes_at is in the past")
+    if kind == "binary":
+        cands = [{"name": BINARY_NAME, "prior": int(spec.get("prior") or 50)}]
+    else:
+        cands = [{"name": str(o["name"]).strip(), "prior": int(o.get("prior") or 0) or None}
+                 for o in spec.get("outcomes") or []]
+        if len(cands) < 2:
+            raise TradingError("a multi-outcome market needs at least 2 outcomes")
+    term = db.current_term()
+    criteria = str(spec.get("resolution_criteria") or "").strip() or \
+        db.get_setting("defaults.criteria.generic", "Resolves by admin decision.")
+    extra = {"description": spec.get("description"), "ai_reason": spec.get("reason"),
+             "created_by_ai": bool(created_by_ai)}
+    if article:
+        extra.update(source_name=article.get("source"), source_url=article.get("url"),
+                     article_id=article.get("id"))
+    return create_race(term["name"] if term else "General", question, closes_at, criteria, cands,
+                       status=status, kind=kind, category=spec.get("category") or "news", **extra)
 
 
 def reject_race(race_id):

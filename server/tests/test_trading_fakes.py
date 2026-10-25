@@ -68,8 +68,8 @@ class FakeDB:
     def adjust_cash(self, uid, delta, conn=None):
         self.users[uid]["cash"] += delta
 
-    def create_user(self, username, pw_hash, is_admin=False, conn=None):
-        return self.get_user(self.add_user(username, is_admin=is_admin))
+    def create_user(self, username, pw_hash, is_admin=False, cash=None, conn=None):
+        return self.get_user(self.add_user(username, is_admin=is_admin, cash=100000 if cash is None else cash))
 
     def get_user_by_username(self, name, conn=None):
         return next((dict(u) for u in self.users.values() if u["username"] == name), None)

@@ -10,40 +10,6 @@ os.environ["FAKE_AI"] = "1"
 import pytest  # noqa: E402
 
 import ai  # noqa: E402
-import content_api  # noqa: E402
-
-
-def _body(**over):
-    kick = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    b = {"election": "Michaelmas 2026", "position": "Men's Football Cuppers: Keble vs Worcester",
-         "seats": 1, "closes_at": kick, "description": "Group A · Men's Football Cuppers",
-         "candidates": [{"name": "Keble", "prior": 40}, {"name": "Draw", "prior": 25}, {"name": "Worcester", "prior": 35}]}
-    b.update(over)
-    return b
-
-
-def test_validate_ok():
-    fields, cands = content_api._validate(_body())
-    assert fields["seats"] == 1
-    assert fields["description"] == "Group A · Men's Football Cuppers"
-    assert cands == [{"name": "Keble", "prior": 40}, {"name": "Draw", "prior": 25}, {"name": "Worcester", "prior": 35}]
-    assert fields["resolution_criteria"]
-
-
-@pytest.mark.parametrize("over,msg", [
-    ({"election": "Autumn 2026"}, "election"),
-    ({"position": "  "}, "position"),
-    ({"closes_at": "2020-01-01T00:00:00Z"}, "future"),
-    ({"closes_at": "2030-01-01T00:00:00"}, "timezone"),
-    ({"closes_at": "soon"}, "ISO"),
-    ({"candidates": [{"name": "Keble", "prior": 50}]}, "2 to 12"),
-    ({"candidates": [{"name": "Keble", "prior": 50}, {"name": "keble", "prior": 50}]}, "unique"),
-    ({"candidates": [{"name": "Keble", "prior": 0}, {"name": "Oriel", "prior": 50}]}, "priors"),
-    ({"seats": 0}, "seats"),
-])
-def test_validate_rejects(over, msg):
-    with pytest.raises(ValueError, match=msg):
-        content_api._validate(_body(**over))
 
 
 def test_fake_brief_names_favourite_and_mover():

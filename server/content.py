@@ -1,7 +1,10 @@
-"""Content service (owner C): Gemini briefs and the daily digest for Cuppers matches.
+"""Content service (owner C): Gemini briefs, the daily digest, and article -> market
+proposals.
 
-Matches and results are posted by hand in the admin portal (COLLAB 14), so there is no
-scraping: process_new_articles() is kept for the COLLAB 7.3 contract and does nothing.
+Cuppers matches and results are posted by hand in the admin portal (COLLAB 14). News markets
+come from scraped Cherwell / Oxford Student articles (scraper.py): with a Gemini key,
+process_new_articles() turns each new article into a 'proposed' race for an admin to approve;
+without one, admins create them from the portal's Articles tab.
 """
 import logging
 import os
@@ -19,8 +22,27 @@ BRIEF_MOVE_POINTS = 5
 DIGEST_EVERY_S = 24 * 3600
 
 
-def process_new_articles():
-    return 0
+PROPOSE_BATCH = 10
+
+
+def process_new_articles(limit=PROPOSE_BATCH):
+    """Gemini proposals for unprocessed articles -> proposed races. Returns races created.
+    Without Gemini this is a no-op and the articles stay unprocessed (admin queue)."""
+    if ai._fake():
+        return 0
+    import trading
+    made = 0
+    for a in db.unprocessed_articles(limit=limit):
+        try:
+            spec = ai.propose_market(a)
+            if spec:
+                trading.create_race_from_spec(spec, article=a, status="proposed", created_by_ai=True)
+                made += 1
+        except Exception:
+            log.exception("proposal for article %s failed", a["id"])
+        db.mark_article_processed(a["id"])
+    log.info("gemini proposed %d markets", made)
+    return made
 
 
 def _outcomes(race_id, hours=24):

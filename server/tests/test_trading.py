@@ -256,3 +256,71 @@ def test_invariants_after_random_trading(env):
             if o["side"] == "buy":
                 db_bids[o["price"]] = db_bids.get(o["price"], 0) + o["qty_remaining"]
         assert {l["price"]: l["qty"] for l in bk["bids"]} == db_bids
+
+
+# ------------------------------------------------------------- yes/no and multi markets
+def test_create_binary_race_and_resolve_both_ways(env):
+    fake, eng = env
+    u, v = fake.add_user("u"), fake.add_user("v")
+    for outcome in ("YES", "NO"):
+        rid = trading.create_race("Michaelmas 2026", f"Will it happen ({outcome})?", "2026-12-01T12:00:00Z",
+                                  "rules", [{"name": "ignored", "prior": 30}], kind="binary", category="news")
+        race = fake.get_race(rid)
+        assert race["kind"] == "binary" and race["category"] == "news"
+        [m] = fake.race_markets(rid)
+        assert m["candidate"] == "Yes" and m["question"] == f"Will it happen ({outcome})?" and m["ai_prior"] == 30
+        assert m["category"] == "news"
+        trading.place_order(u, m["id"], "YES", "buy", "limit", 40, 10)
+        trading.place_order(v, m["id"], "YES", "sell", "limit", 40, 10)
+        before_u, before_v = fake.users[u]["cash"], fake.users[v]["cash"]
+        with pytest.raises(trading.TradingError):
+            trading.resolve_race(rid, [m["id"], m["id"]])
+        trading.resolve_race(rid, [m["id"]] if outcome == "YES" else [])
+        assert fake.markets[m["id"]]["outcome"] == outcome
+        assert fake.get_race(rid)["status"] == "resolved"
+        paid = 1000 if outcome == "YES" else 0
+        assert fake.users[u]["cash"] == before_u + paid
+        assert fake.users[v]["cash"] == before_v - paid   # the short pays 100 per share on YES
+
+
+def test_binary_race_rejects_two_outcomes(env):
+    with pytest.raises(trading.TradingError):
+        trading.create_race("Michaelmas 2026", "Q?", "2026-12-01T12:00:00Z", "r", ["a", "b"], kind="binary")
+    with pytest.raises(trading.TradingError):
+        trading.create_race("Michaelmas 2026", "Q?", "2026-12-01T12:00:00Z", "r", ["a", "b"], kind="poll")
+
+
+def test_multi_race_question_text(env):
+    fake, eng = env
+    rid = trading.create_race("Hilary 2027", "Who wins the Union presidency?", "2027-02-01T12:00:00Z", "r",
+                              [{"name": "Ann", "prior": 60}, {"name": "Bo", "prior": 40}], kind="multi",
+                              category="union")
+    qs = sorted(m["question"] for m in fake.race_markets(rid))
+    assert qs == ["Who wins the Union presidency: Ann?", "Who wins the Union presidency: Bo?"]
+
+
+def test_mm_bot_does_not_normalise_binary(env):
+    fake, eng = env
+    rid = trading.create_race("Michaelmas 2026", "Will X happen?", "2026-12-01T12:00:00Z", "r",
+                              [{"name": "Yes", "prior": 20}], kind="binary")
+    mm_bot.requote_all()
+    [m] = fake.race_markets(rid)
+    bk = trading.get_book(m["id"])
+    assert abs((bk["bids"][0]["price"] + bk["asks"][0]["price"]) / 2 - 20) <= 1   # not pinned at 98
+
+
+def test_create_race_from_spec(env, monkeypatch):
+    fake, eng = env
+    fake.current_term = lambda conn=None: {"name": "Michaelmas 2026"}
+    fake.get_setting = lambda key, default=None: default
+    monkeypatch.setattr(trading.db, "current_term", fake.current_term, raising=False)
+    monkeypatch.setattr(trading.db, "get_setting", fake.get_setting, raising=False)
+    art = {"id": 7, "source": "Cherwell", "url": "https://cherwell.org/x"}
+    rid = trading.create_race_from_spec({"question": "Will the Greenway open by June?", "kind": "binary",
+                                         "prior": 35, "closes_at": "2027-05-01T12:00:00Z",
+                                         "category": "news", "reason": "article says"}, article=art)
+    r = fake.get_race(rid)
+    assert (r["status"], r["kind"], r["source_url"], r["article_id"], r["ai_reason"]) == \
+        ("proposed", "binary", "https://cherwell.org/x", 7, "article says")
+    with pytest.raises(trading.TradingError):
+        trading.create_race_from_spec({"question": "Old?", "closes_at": "2020-01-01T00:00:00Z"})

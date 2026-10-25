@@ -70,8 +70,10 @@ def tag():
     db.ensure_schema()
     db.ensure_bot_user()
     t = uuid.uuid4().hex[:6]
-    yield t
-    cleanup(t)
+    try:
+        yield t
+    finally:
+        cleanup(t)
 
 
 @pytest.fixture(scope="session")
@@ -106,6 +108,12 @@ def make_race(tag):
                 "ai_prior": prior, "created_at": created})
         return {"id": rid, "election": election, "markets": markets, "created": created, "closes": closes}
     return _make
+
+
+def refresh_candles(start, end=None):
+    """Materialise candles_5m/1h over [start, end]. Back-dated trades land in windows the
+    refresh policy has already materialised, so they only show up after this."""
+    db.refresh_candles(start, end)
 
 
 def trade(market_id, price, qty, t, buyer, seller, taker_side="buy"):

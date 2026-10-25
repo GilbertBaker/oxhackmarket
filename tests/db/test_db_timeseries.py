@@ -5,7 +5,7 @@ import pytest
 from psycopg import sql
 
 import db
-from conftest import RON, autocommit, trade
+from conftest import RON, autocommit, refresh_candles, trade
 
 S = db.SCHEMA
 
@@ -123,6 +123,7 @@ def test_price_history_has_no_holes(make_race, house, make_user, bucket):
     now = db.utcnow()
     trade(a, 45, 2, now - width * 30, u["id"], house)
     trade(a, 55, 3, now - width * 10, u["id"], house)
+    refresh_candles(now - width * 31)   # back-dated trades: materialise the cagg windows
     pts = db.price_history(a, bucket, r["created"])
     assert len(pts) >= 40
     assert None not in [p["close"] for p in pts]
@@ -142,6 +143,7 @@ def test_price_history_ohlcv(make_race, house, make_user):
     b0 = floor(db.utcnow() - timedelta(hours=1), width)
     for dt, price, qty in [(30, 40, 1), (60, 47, 2), (120, 38, 3), (200, 44, 4)]:
         trade(a, price, qty, b0 + timedelta(seconds=dt), u["id"], house)
+    refresh_candles(b0)
     for bucket in ("1m", "5m"):
         pts = {p["t"]: p for p in db.price_history(a, bucket, r["created"])}
         if bucket == "5m":

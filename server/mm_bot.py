@@ -9,6 +9,7 @@ import trading
 
 log = logging.getLogger("mm_bot")
 
+# Defaults; the live values come from oxmarket.settings (mm.*), editable in the admin portal.
 INTERVAL = 10
 SIZE = 50
 HALF_SPREAD = 2
@@ -21,11 +22,20 @@ _ema = {}          # market_id -> EMA of trade prices (None = never traded); fed
 _ema_lock = threading.Lock()
 
 
+def _p(name):
+    """Current value of an mm.* setting (cached by db.get_setting), else the default above."""
+    default = globals()[name.upper()]
+    get = getattr(db, "get_setting", None)
+    v = get(f"mm.{name}", default) if get else default
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else default
+
+
 def _on_fills(market_id, fills):
     with _ema_lock:
         ema = _ema.get(market_id)
+        alpha = _p("alpha")
         for f in fills:
-            ema = f["price"] if ema is None else ALPHA * f["price"] + (1 - ALPHA) * ema
+            ema = f["price"] if ema is None else alpha * f["price"] + (1 - alpha) * ema
         _ema[market_id] = ema
 
 
@@ -43,9 +53,9 @@ def _trade_ema(market_id, conn=None):
     with _ema_lock:
         if market_id in _ema:
             return _ema[market_id]
-    ema = None
+    ema, alpha = None, _p("alpha")
     for t in reversed(db.recent_trades(market_id, limit=20, conn=conn)):   # newest first -> oldest first
-        ema = t["price"] if ema is None else ALPHA * t["price"] + (1 - ALPHA) * ema
+        ema = t["price"] if ema is None else alpha * t["price"] + (1 - alpha) * ema
     with _ema_lock:
         _ema.setdefault(market_id, ema)
         return _ema[market_id]
@@ -61,11 +71,15 @@ def raw_fair(market, n_candidates, seats, conn=None):
     ema = _trade_ema(market["id"], conn)
     if ema is None:
         return float(prior)
-    return (1 - PRIOR_PULL) * ema + PRIOR_PULL * prior
+    pull = _p("prior_pull")
+    return (1 - pull) * ema + pull * prior
 
 
-def fair_values(markets, seats, conn=None):
-    """{market_id: fair} normalised to sum 100*seats, clamped to 2..98."""
+def fair_values(markets, seats, conn=None, kind=None):
+    """{market_id: fair} normalised to sum 100*seats, clamped to 2..98.
+    A yes/no race (kind 'binary', one market) is not normalised: its fair is just raw_fair."""
+    if kind == "binary":
+        return {m["id"]: _clamp(raw_fair(m, 2, 1, conn), 2, 98) for m in markets}
     raws = {m["id"]: max(0.5, raw_fair(m, len(markets), seats, conn)) for m in markets}
     total = sum(raws.values())
     return {mid: _clamp(r * 100.0 * seats / total, 2, 98) for mid, r in raws.items()}
@@ -74,15 +88,17 @@ def fair_values(markets, seats, conn=None):
 def quotes(fair, house_position):
     skew = _clamp(-house_position / 50.0, -3, 3)
     mid = round(fair + skew)
-    bid = _clamp(mid - HALF_SPREAD, 1, 98)
-    ask = _clamp(mid + HALF_SPREAD, 2, 99)
+    half = _p("half_spread")
+    bid = _clamp(mid - half, 1, 98)
+    ask = _clamp(mid + half, 2, 99)
     if ask <= bid:
         ask = bid + 1
     return bid, ask
 
 
 def _target(bid, ask):
-    return [("buy", bid, SIZE), ("sell", ask, SIZE)]
+    size = int(_p("size"))
+    return [("buy", bid, size), ("sell", ask, size)]
 
 
 def _current(orders):
@@ -111,9 +127,10 @@ def requote_market(house_id, market, fair, mine=None, pos=None):
                     trading.cancel_order(house_id, o["id"], is_admin=True, _order=o, _conn=conn)
                 except trading.TradingError:
                     pass
-        trading.place_order(house_id, market_id, "YES", "buy", "limit", bid, SIZE,
+        size = int(_p("size"))
+        trading.place_order(house_id, market_id, "YES", "buy", "limit", bid, size,
                             _trusted_market=market, _conn=conn)
-        trading.place_order(house_id, market_id, "YES", "sell", "limit", ask, SIZE,
+        trading.place_order(house_id, market_id, "YES", "sell", "limit", ask, size,
                             _trusted_market=market, _conn=conn)
     time.sleep(YIELD)   # Python locks aren't fair: let waiting user orders in before the next market
     return True
@@ -133,7 +150,8 @@ def requote_all():
             try:
                 markets = [m for m in db.race_markets(race["id"], conn=conn) if m["status"] == "open"]
                 if markets:
-                    plan.append((markets, fair_values(markets, int(race.get("seats") or 1), conn)))
+                    plan.append((markets, fair_values(markets, int(race.get("seats") or 1), conn,
+                                                      kind=race.get("kind"))))
             except Exception:
                 log.exception("fair values failed for race %s", race["id"])
     changed = 0
@@ -153,7 +171,7 @@ def _loop():
             requote_all()
         except Exception:
             log.exception("mm bot pass failed")
-        time.sleep(INTERVAL)
+        time.sleep(max(1, _p("interval")))
 
 
 def start():
