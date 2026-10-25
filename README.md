@@ -16,6 +16,11 @@ python server/seed.py              # the 10 starting Oxford Union markets (idemp
 python server/app.py               # http://localhost:5000
 ```
 
+For a demo, also run `python server/demo.py` (with the app stopped). It creates the login
+`demo` / `oxhack2026` (an admin) and backfills 14 days of synthetic price history (ticks +
+house-vs-house trades) for every open market, back-dating the markets so charts, 24h moves
+and the Time Machine have data. It is safe to re-run: markets that already have history are skipped.
+
 Set `DISABLE_JOBS=0` in `.env` for the real thing: the market maker, price ticks,
 auto-close, portfolio snapshots and the news scraper all run as background jobs.
 Admins are the usernames listed in `ADMIN_USERNAMES` when they register.
