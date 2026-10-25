@@ -513,6 +513,18 @@
       return { race: raceJson(r) };
     }],
     ["GET", /^\/api\/admin\/invariants$/, () => ({ ok: true, problems: [] })],
+    // admin portal (read-only in mock mode beyond what the routes above support)
+    ["GET", /^\/api\/meta$/, () => ({
+      categories: [{ slug: "cuppers", name: "Cuppers", sort: 10 }, { slug: "news", name: "Oxford news", sort: 20 }, { slug: "union", name: "Oxford Union", sort: 30 }],
+      sports: [], competitions: Array.from(new Set(DEFS.map((d) => d.comp))).map((n, i) => ({ id: i + 1, name: n, has_draw: /Football|Hockey/.test(n), active: true })),
+      teams: Array.from(new Set(DEFS.flatMap((d) => [d.home, d.away]))).sort(), terms: [TERM], current_term: TERM,
+      defaults: { priors_draw: [40, 25, 35], priors_no_draw: [50, 50], criteria_match: crit("Cuppers"), criteria_generic: "Resolves by admin decision." },
+    })],
+    ["GET", /^\/api\/admin\/races$/, () => { needAdmin(); return { races: Object.values(S.races).map((r) => raceJson(r, true)) }; }],
+    ["GET", /^\/api\/admin\/articles$/, () => ({ articles: [] })],
+    ["GET", /^\/api\/admin\/settings$/, () => ({ settings: [{ key: "mm.size", value: 50, description: "Market maker: shares quoted on each side" }] })],
+    ["GET", /^\/api\/admin\/ref\/(\w+)$/, () => ({ rows: [] })],
+    ["GET", /^\/api\/admin\/actions$/, () => ({ actions: [] })],
   ];
 
   function login(b, register) {

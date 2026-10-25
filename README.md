@@ -1,8 +1,9 @@
 # OxMarket
 
-A play-money prediction market on Oxford Union elections, built at OxHack (theme: TIME).
-Every candidate in every race is its own YES/NO market. Prices are in pence (1..99 = implied %).
-The TimescaleDB-backed Time Machine shows who was winning each position at any moment.
+A play-money prediction market on Oxford life, built at OxHack (theme: TIME): college
+Cuppers matches, Oxford Union questions and Oxford news. Every outcome is its own YES/NO
+market. Prices are in pence (1..99 = implied %). Anyone can sign up and gets £1,000 of play
+money. The TimescaleDB-backed Time Machine shows the odds on everything at any moment.
 
 ## Quick start
 
@@ -11,8 +12,33 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r server/requirements.txt
 cp .env.example .env               # then fill in the DB password, SECRET_KEY, etc.
+python server/seed.py              # the 10 starting Oxford Union markets (idempotent)
 python server/app.py               # http://localhost:5000
 ```
+
+Set `DISABLE_JOBS=0` in `.env` for the real thing: the market maker, price ticks,
+auto-close, portfolio snapshots and the news scraper all run as background jobs.
+Admins are the usernames listed in `ADMIN_USERNAMES` when they register.
+
+## Admin portal (`/admin.html`)
+
+Everything is stored in the database (schema `oxmarket`):
+
+- **Markets**: drafts awaiting approval, markets awaiting a result (post the result to settle
+  and pay out), and every market in every status with edit / approve / reject / stop trading.
+- **Create market**: three kinds (`races.kind`). *Cuppers match* (Home / Draw / Away, from the
+  competitions and teams tables), *Yes / No question* (one market), *Multiple choice* (named
+  outcomes, N winners). Publish now or save as a draft.
+- **News articles**: Cherwell and Oxford Student headlines scraped from their RSS feeds
+  (`server/scraper.py`). Turn one into a market (linked to its source) or dismiss it. With a
+  `GEMINI_API_KEY`, Gemini proposes markets from new articles as drafts.
+- **Reference data**: terms, categories, competitions, teams and sports tables.
+- **Settings**: the `settings` table (market maker size / spread / interval, job intervals,
+  starting cash, default rules and odds). Changes apply within ~30 s, no restart.
+- **Activity**: every admin write is logged to the `admin_actions` hypertable.
+
+Tests: `python -m pytest server/tests -q` (no DB) and `python -m pytest tests/db -v` (real DB,
+run separately; only touches rows tagged with a random per-run id).
 
 On Intel Macs, `pip install --only-binary cryptography -r server/requirements.txt`
 avoids a source build of `cryptography`.

@@ -419,3 +419,24 @@ a.match-title:hover { text-decoration: underline; }
   .tm-controls { flex-wrap: wrap; }
   .tm-track { order: 5; flex-basis: 100%; }
 }
+
+/* ---------------------------------------------------------------- admin portal */
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 18px 0 14px; border-bottom: 1px solid var(--border); }
+.admin-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; font: inherit; font-weight: 600; color: var(--text-2); cursor: pointer; margin-bottom: -1px; }
+.admin-tabs button:hover { color: var(--text); }
+.admin-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.admin-tabs .count, .section-title .count { font-size: 12px; color: var(--text-3); margin-left: 4px; }
+.admin-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.admin-filters .input { width: auto; min-width: 150px; }
+.kind-seg, .ref-seg { display: inline-flex; flex-wrap: wrap; gap: 4px; background: var(--subtle); padding: 4px; border-radius: var(--radius-sm); }
+.kind-seg label, .ref-seg button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; color: var(--text-2); border: 0; background: none; margin: 0; }
+.kind-seg label:has(input:checked), .ref-seg button[aria-selected="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
+.kind-seg input { accent-color: var(--accent); }
+.check-row { color: var(--text); font-weight: 550; margin-top: 14px; cursor: pointer; gap: 8px; }
+.check-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+.outcome-editor { display: grid; gap: 6px; margin-top: 6px; }
+.outcome-row { display: grid; grid-template-columns: 1fr 84px 32px; gap: 6px; align-items: center; }
+.ref-grid .input-sm { min-width: 90px; }
+.admin-dialog { border: 0; border-radius: var(--radius); padding: 22px; width: min(560px, 92vw); box-shadow: var(--shadow-hover); }
+.admin-dialog::backdrop { background: rgba(13, 27, 51, .35); }
+.admin-pane .race-grid { margin-bottom: 8px; }
