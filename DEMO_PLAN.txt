@@ -1,0 +1,155 @@
+OXMARKET DEMO PLAN  (target: 7-8 minutes + questions)
+=====================================================
+
+One-line pitch
+--------------
+OxMarket is a play-money prediction market on Oxford life: college Cuppers matches,
+Oxford Union questions and Oxford news. Each outcome is its own YES/NO market, and a price
+in pence is the market's probability (62p = 62% chance). The hackathon theme is TIME, so
+the TimescaleDB-backed Time Machine can replay what the market believed at any moment.
+
+
+BEFORE THE DEMO (do this 15+ minutes early)
+-------------------------------------------
+1. Build the C++ engine (book/OrderBook, target MarketServer) so that
+   book/OrderBook/build/MarketServer.exe exists. Without it the server falls back to the
+   pure-Python book. That works, but the demo should run on the real engine.
+2. In .env set DISABLE_JOBS=0. This turns on the house market maker, price ticks,
+   auto-close, portfolio snapshots and the news scraper. Without it the order books and
+   charts stay static.
+3. Optional: set GEMINI_API_KEY. Without it the "Why did the odds move?" briefs and the
+   digest are fixed placeholder text, and no AI-drafted markets appear from news articles.
+4. Start the server:  python server/app.py   ->  http://localhost:5000
+   Check the log says the engine started (no "pure-Python fallback" error).
+5. Accounts:
+   - "admin" (the name listed in ADMIN_USERNAMES) for the admin portal.
+   - A normal trader, e.g. "demo_trader", registered in advance. Place a few trades with it
+     so the portfolio and leaderboard have something to show.
+6. Leave the jobs running for ~10 minutes so the charts, Biggest movers and Time Machine
+   have recent history.
+7. Open these tabs in order:
+     1  /                  (home)
+     2  /login.html        (logged in as demo_trader)
+     3  /admin.html        (in a second browser or private window, logged in as admin)
+     4  /timemachine.html
+8. Have a Cuppers match ready that you can settle live: a market whose close time has
+   passed, so it shows under Admin > Markets > Awaiting result. (Or create one before the
+   demo with a close time a few minutes later.)
+
+
+DEMO SCRIPT
+-----------
+
+1. HOME PAGE  /                                                            (~1 min)
+   - "Trade on Cuppers matches, Oxford Union questions and Oxford news."
+   - Explain the core idea: price = probability. 62p means the crowd thinks 62%.
+   - Tabs: Upcoming / Awaiting result / Results. The search box filters matches.
+   - Biggest movers: the largest odds changes in the last 24 hours.
+   - Latest Cuppers news: scraped from the Cherwell and Oxford Student RSS feeds.
+   - Point out the three market types on the page: Cuppers matches (Home/Draw/Away),
+     Yes/No questions (e.g. the Oxford Union markets) and multiple choice.
+
+2. SIGN UP / LOG IN  /login.html                                           (~20 s)
+   - Anyone can sign up. Usernames are 3-20 characters, passwords at least 6.
+   - Every new account starts with GBP 1,000 of play money. No real money is involved.
+   - Optionally sign up a fresh account live to show how quick it is.
+
+3. MATCH PAGE  /race.html  (click a Cuppers match)                         (~1 min)
+   - Odds over time chart with 1m / 5m / 1h buckets (stored in TimescaleDB).
+   - Outcomes table: chance, 24h change and 24h volume per outcome, with a Trade button.
+   - The outcomes of a match are normalised so their chances add up sensibly.
+   - "Why did the odds move?": a Gemini-generated explanation, with Refresh analysis.
+   - Rules section: how the market resolves.
+
+4. TRADING  /market.html  (click Trade on one outcome)                     (~2 min)
+   This is the centrepiece, so go slowly.
+   - Order book: real bids and asks, in YES terms with the NO equivalent greyed out.
+     Clicking a level fills the order ticket.
+   - The house market maker keeps both sides quoted, so there is always someone to trade
+     with. It quotes around a fair price: the AI prior until the first trade, then an
+     average of recent trades.
+   - Ticket: Buy Yes / Buy No, Limit or Market order, price in pence, quick share buttons
+     (+10 / +50 / +100).
+   - LIVE: Buy 50 YES at market. Show the fill appear in Recent trades and the chart move.
+   - LIVE: Place a resting limit order below the market. It appears in the order book and
+     under "Your open orders here". Cancel it.
+   - Talking points:
+     * NO is a view on the same book: Buy NO at p = Sell YES at (100 - p). One book per
+       outcome, no separate NO liquidity.
+     * Matching runs in a C++ order book engine (AVL tree of price levels) that the Python
+       server drives over stdin/stdout.
+     * Cash and positions live in Postgres. Every fill is written in a single transaction.
+       If that write fails, the engine restarts and replays the open orders from the DB.
+     * Risk check before an order reaches the engine: buys lock price x qty, shorts lock
+       100 per share. Orders you can't cover are rejected. (Optional: try an order bigger
+       than your balance to show the rejection.)
+
+5. PORTFOLIO  /portfolio.html                                              (~30 s)
+   - Positions grouped by match, valued at current prices.
+   - Open orders, with cancel.
+   - Cash vs. equity (cash plus open positions at current prices).
+
+6. LEADERBOARD  /leaderboard.html                                          (~30 s)
+   - Ranked by equity, with profit/loss against the starting GBP 1,000.
+   - "Hindsight" chart: the equity of the current top five over the last week, built from
+     the portfolio snapshots job.
+
+7. TIME MACHINE  /timemachine.html          (the TIME theme, so make it land)  (~1.5 min)
+   - "Replay the term as it happened."
+   - Drag the slider back through Michaelmas. Every match's odds bars change to what the
+     market believed at that moment, and the favourites re-sort.
+   - Press play. Show the 1x / 3x / 10x speeds. The diamond marks a new favourite.
+   - "Headlines as of then": the news that was published by that moment, next to the odds.
+   - Click Now to jump back to the present.
+   - Talking point: prices are stored in a TimescaleDB hypertable with compression, so
+     "what were the odds at time T?" is a fast query, not a separate snapshot table.
+
+8. ADMIN PORTAL  /admin.html  (switch to the admin window)                 (~2 min)
+   - Markets tab:
+     * Drafts awaiting approval (including AI-proposed markets): approve or reject.
+     * LIVE: Awaiting result. Pick the winner of the prepared match and post the result.
+       Positions settle and pay out straight away. Switch to the trader's Portfolio and
+       Leaderboard to show the payout.
+     * All markets, filterable by status, type and category: edit or stop trading.
+   - Create market (LIVE, quick): show the three kinds.
+     * Cuppers match: term, competition, round, home/away teams, whether a draw is possible.
+     * Yes / No question: question text and opening chance of YES.
+     * Multiple choice: named outcomes with opening odds, and the number of winners.
+     * Set a close time (trading stops then). Publish now or save as a draft.
+   - News articles: scraped headlines. Turn one into a market linked to its source, or
+     dismiss it. With Gemini on, new articles automatically get draft markets.
+   - Reference data: terms, categories, competitions, teams and sports, all editable.
+   - Settings: market maker size, spread and interval, job intervals, starting cash and
+     default odds. Changes apply within ~30 s with no restart.
+   - Activity: every admin write is logged to an audit hypertable.
+
+9. WRAP-UP                                                                 (~30 s)
+   - Recap: real order book engine + Postgres ledger + TimescaleDB history + Gemini
+     content, on markets Oxford students actually care about.
+   - Next steps: more colleges and sports, live score feeds, automatic resolution
+     from news.
+
+
+FALLBACKS IF SOMETHING BREAKS
+-----------------------------
+- Engine exe missing or crashing: the server uses the pure-Python book with the same
+  protocol. Keep going and mention it.
+- No Gemini key / no network: briefs show placeholder text. Say that it is Gemini-backed
+  and move on.
+- Charts flat: the background jobs are off (DISABLE_JOBS=1). Make a few trades by hand
+  so there is history.
+- Login problems: have a second pre-registered trader account ready.
+
+
+ARCHITECTURE CHEAT SHEET (for questions)
+----------------------------------------
+- Frontend: static HTML/CSS/JS in web/, served by Flask.
+- Backend: Flask (server/app.py) with trading_api, data_api, admin_api and content_api
+  blueprints.
+- Matching: C++ OrderBook (book/OrderBook) as MarketServer.exe, driven by server/engine.py.
+- Ledger: Postgres (schema oxmarket). trading.place_order does validate -> risk check ->
+  engine -> write fills in one transaction.
+- Time series: TimescaleDB hypertables for price history and admin actions.
+- Jobs (server/jobs.py): market maker (mm_bot.py), price ticks, auto-close, portfolio
+  snapshots, news scraper (scraper.py).
+- AI (server/ai.py): Gemini match briefs, daily digest, markets drafted from articles.
