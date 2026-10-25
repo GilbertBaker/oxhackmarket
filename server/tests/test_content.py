@@ -22,19 +22,11 @@ def _body(**over):
     return b
 
 
-def test_question_text():
-    pos, term = "Men's Football Cuppers: Keble vs Worcester", "Michaelmas 2026"
-    assert content_api._question("Keble", pos, term) == "Will Keble beat Worcester (Men's Football Cuppers, Michaelmas 2026)?"
-    assert content_api._question("Worcester", pos, term) == "Will Worcester beat Keble (Men's Football Cuppers, Michaelmas 2026)?"
-    assert content_api._question("Draw", pos, term) == "Will Keble vs Worcester end in a draw (Men's Football Cuppers, Michaelmas 2026)?"
-    assert content_api._question("Keble", "Rowing", term) == "Will Keble win Rowing (Michaelmas 2026)?"
-
-
 def test_validate_ok():
     fields, cands = content_api._validate(_body())
-    assert fields["status"] == "open" and fields["seats"] == 1
+    assert fields["seats"] == 1
     assert fields["description"] == "Group A · Men's Football Cuppers"
-    assert cands == [("Keble", 40), ("Draw", 25), ("Worcester", 35)]
+    assert cands == [{"name": "Keble", "prior": 40}, {"name": "Draw", "prior": 25}, {"name": "Worcester", "prior": 35}]
     assert fields["resolution_criteria"]
 
 

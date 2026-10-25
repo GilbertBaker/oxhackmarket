@@ -71,7 +71,7 @@ def _admin_usernames():
 # ---------------------------------------------------------------- serializers
 
 def _sparklines(market_ids):
-    since = db.utcnow() - timedelta(hours=24)
+    since = db.utcnow() - timedelta(hours=23)  # 24 hourly buckets incl. the current one
     series = db.close_series(market_ids, "1h", since)
     return {mid: [v for _, v in pts if v is not None] for mid, pts in series.items()}
 

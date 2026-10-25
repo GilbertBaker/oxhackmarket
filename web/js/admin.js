@@ -118,9 +118,11 @@
 
   // ------------------------------------------------------------ post a match
   function setupForm() {
-    const kick = new Date(Date.now() + 2 * 86400e3);
-    kick.setHours(14, 0, 0, 0);
-    $("#nm-kick").value = toLocalInput(kick);
+    if (!$("#nm-kick").value) {
+      const kick = new Date(Date.now() + 2 * 86400e3);
+      kick.setHours(14, 0, 0, 0);
+      $("#nm-kick").value = toLocalInput(kick);
+    }
     ["#nm-home", "#nm-away", "#nm-draw", "#nm-comp"].forEach((s) => $(s).addEventListener("input", renderPriors));
     $("#nm-draw").addEventListener("change", renderPriors);
     $("#nm-priors").addEventListener("input", renderPriorSum);
@@ -159,6 +161,12 @@
     const term = $("#nm-term").value.trim(), comp = $("#nm-comp").value.trim(), round = $("#nm-round").value.trim();
     const home = $("#nm-home").value.trim(), away = $("#nm-away").value.trim();
     const kick = new Date($("#nm-kick").value);
+    if ($$("#nm-priors input").length !== outcomeNames().length) {
+      // Draw toggle and odds inputs got out of step (e.g. restored form state).
+      renderPriors();
+      out.innerHTML = msg("Check the opening odds for each outcome, then post again.", "err");
+      return;
+    }
     const priors = $$("#nm-priors input").map((i) => Number(i.value));
     const err = !/^(Michaelmas|Hilary|Trinity) \d{4}$/.test(term) ? "Term must look like \"Michaelmas 2026\"."
       : !comp ? "Enter the competition." : !home || !away ? "Enter both teams."
