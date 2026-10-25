@@ -6,3 +6,4 @@ logs/
 *.exe
 .venv/
 .pytest_cache/
+isis predictor/.delta/

@@ -1,110 +1,146 @@
-# OxMarket
+# OxMarket: trade on Oxford, watch the odds move through time
 
-A play-money prediction market on Oxford life, built at OxHack (theme: TIME): college
-Cuppers matches, Oxford Union questions and Oxford news. Every outcome is its own YES/NO
-market. Prices are in pence (1..99 = implied %). Anyone can sign up and gets £1,000 of play
-money. The TimescaleDB-backed Time Machine shows the odds on everything at any moment.
+**A play-money prediction market for Oxford life, built at OxHack (theme: TIME).**
+Bet on college Cuppers matches, Oxford Union drama, Oxford news, and, every single day,
+*whether you'll be able to row on the Isis tomorrow*. Every outcome is a YES/NO market priced
+in pence (62p = 62% chance). Sign up, get £1,000 of play money, and see who calls Oxford best.
 
-## Quick start
+![Home page](docs/screenshots/home.png)
 
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r server/requirements.txt
-cp .env.example .env               # then fill in the DB password, SECRET_KEY, etc.
-python server/seed.py              # the 10 starting Oxford Union markets (idempotent)
-python server/app.py               # http://localhost:5000
+## Why it's about TIME
+
+- **Time Machine.** Drag a slider (or press play) to replay the term: every market's odds at any
+  moment, favourites re-sorting as they change, and diamonds marking every lead change. It runs
+  on as-of queries over a TimescaleDB price history.
+- **Daily Isis market.** A new "Can you row on the Isis tomorrow?" market opens at 07:00 each
+  day and settles the next morning from the official OURCs flag. It works like Polymarket's
+  rolling Bitcoin up/down markets, but for Oxford rowing.
+- **Live charts.** 1-minute, 5-minute and 1-hour candles come from continuous aggregates.
+  Countdowns tick to every kick-off and close.
+- **Hindsight.** The leaderboard shows how every trader's equity moved over time.
+
+## Features
+
+| | |
+|---|---|
+| **Real exchange** | A C++ limit order book (AVL tree of price levels, FIFO queues) matches every order. Limit and market orders, partial fills, cancels, collateral checks. NO is a view on the YES book. |
+| **House market maker** | A bot quotes both sides of every market around a fair value, so there is always someone to trade with. |
+| **Isis flag model** | A least-squares linear regression on 07:00 weather + yesterday's flag predicts the OURCs flag (96.5% on held-out days vs 94.7% for "same as yesterday"). Its call sets the market's opening price, and the page shows exactly why it made it. |
+| **Gemini analysis** | Gemini writes the "why did the odds move" brief for each match, a daily digest, and a summary of the Isis market. It only sees the real data (flags, weather, model output, prices) and is told not to invent anything. |
+| **Oxford news** | Cherwell and Oxford Student headlines are scraped automatically. Admins turn them into markets in one click. |
+| **Admin portal** | Create Cuppers matches, yes/no and multiple-choice markets; approve drafts; post results to settle and pay out; edit reference data and live settings; full audit log. |
+
+### The Isis market
+
+![Isis page](docs/screenshots/isis.png)
+
+- **Resolves** YES if the OURCs Isis flag at 07:00 is Green, Light Blue or Dark Blue (college
+  crews can go out), and NO for Amber, Red, Black or Grey. The flag is read live from the OURCs API.
+- **Model:** for each flag colour *k*, solve the normal equations `XᵀX w_k = Xᵀy_k` (one-vs-rest
+  least squares, pure Python). The page shows the predicted flag, a score bar per colour, the
+  inputs (tomorrow's Met Office 07:00 forecast via Open-Meteo, plus yesterday's flag), each
+  input's push on the score, and test accuracy against simple baselines.
+- **Fully automatic:** a background job settles yesterday's market and opens tomorrow's.
+
+### Trading
+
+![Market page](docs/screenshots/market.png)
+
+### Time Machine
+
+![Time Machine](docs/screenshots/timemachine.png)
+
+## Architecture
+
+```
+ browser (plain HTML/CSS/JS + Chart.js)
+        │  JSON over /api
+        ▼
+ Flask app (server/app.py) ─── background jobs: market maker, price ticks,
+        │                       auto-close, snapshots, news scraper, Gemini, Isis roll
+        ├── C++ MarketServer.exe (book/OrderBook), one order book per market,
+        │   driven over stdin/stdout. Pure-Python fallback if it isn't built.
+        ├── TimescaleDB (Tiger Cloud), schema oxmarket
+        │     hypertables: trades, price_ticks, portfolio_snapshots, admin_actions
+        │     continuous aggregates: candles_5m, candles_1h · compression + retention
+        └── Gemini (google-genai), OURCs flag API, Open-Meteo, Cherwell/Oxford Student RSS
 ```
 
-For a demo, also run `python server/demo.py` (with the app stopped). It creates the login
-`demo` / `oxhack2026` (an admin) and backfills 14 days of synthetic price history (ticks +
-house-vs-house trades) for every open market, back-dating the markets so charts, 24h moves
-and the Time Machine have data. It is safe to re-run: markets that already have history are skipped.
+- **The engine only matches; Postgres is the source of truth.** Each order is validated,
+  risk-checked, matched in C++, and its fills are written in one DB transaction. If that fails,
+  the engine restarts and replays every open order from the database.
+- **TimescaleDB:** `time_bucket_gapfill` + `locf` give hole-free charts and sparklines;
+  `first()`/`last()` build OHLC candles; as-of LATERAL lookups power the Time Machine;
+  continuous aggregates keep candles cheap; tick chunks are compressed after a day.
 
-**Isis rowing (`/isis.html`)**: a daily "Can you row on the Isis tomorrow?" market, resolved
-from the official OURCs flag at 07:00 (YES = Green / Light Blue / Dark Blue). The linear regression
-in `isis predictor/model.py` (07:00 weather + yesterday's flag) sets the market maker's opening
-price; the page shows its call, inputs, per-input effects, test accuracy, the last 7 days and a
-Gemini summary. A background job resolves finished days and opens the next one
-(`server/isis.py`). Demo backfill (app stopped): `python server/isis.py --backfill`.
+## Run it
 
-Set `DISABLE_JOBS=0` in `.env` for the real thing: the market maker, price ticks,
-auto-close, portfolio snapshots and the news scraper all run as background jobs.
-Admins are the usernames listed in `ADMIN_USERNAMES` when they register.
+```bash
+pip install -r server/requirements.txt
+cp .env.example .env        # DATABASE_URL, SECRET_KEY, GEMINI_API_KEY (optional)
+python server/seed.py       # starting Oxford Union markets (idempotent)
+python server/app.py        # → http://localhost:5000
+```
 
-## Admin portal (`/admin.html`)
+**Demo data** (run with the app stopped; both are idempotent):
 
-Everything is stored in the database (schema `oxmarket`):
+```bash
+python server/demo.py            # login demo / oxhack2026 (admin) + 14 days of price history
+python server/isis.py --backfill # last 7 days of Isis markets, resolved from real flags
+```
 
-- **Markets**: drafts awaiting approval, markets awaiting a result (post the result to settle
-  and pay out), and every market in every status with edit / approve / reject / stop trading.
-- **Create market**: three kinds (`races.kind`). *Cuppers match* (Home / Draw / Away, from the
-  competitions and teams tables), *Yes / No question* (one market), *Multiple choice* (named
-  outcomes, N winners). Publish now or save as a draft.
-- **News articles**: Cherwell and Oxford Student headlines scraped from their RSS feeds
-  (`server/scraper.py`). Turn one into a market (linked to its source) or dismiss it. With a
-  `GEMINI_API_KEY` and `AI_PROPOSALS=1` (off by default), Gemini proposes markets from new
-  articles as drafts. Gemini also writes the match briefs and daily digest (`FAKE_AI=0`); the
-  free tier is 20 requests/day per model, so briefs are rewritten at most every 6 hours.
-- **Reference data**: terms, categories, competitions, teams and sports tables.
-- **Settings**: the `settings` table (market maker size / spread / interval, job intervals,
-  starting cash, default rules and odds). Changes apply within ~30 s, no restart.
-- **Activity**: every admin write is logged to the `admin_actions` hypertable.
+| `.env` | |
+|---|---|
+| `FAKE_AI=0` + `GEMINI_API_KEY` | real Gemini text (template text otherwise). The default model is `gemini-3.1-flash-lite`. |
+| `AI_PROPOSALS=1` | let Gemini draft markets from scraped news (off by default) |
+| `DISABLE_JOBS=1` | no background jobs (market maker, ticks, scraper, Isis roll) |
+| `ADMIN_USERNAMES` | usernames that become admins when they register |
 
-Tests: `python -m pytest server/tests -q` (no DB) and `python -m pytest tests/db -v` (real DB,
-run separately; only touches rows tagged with a random per-run id).
+### Building the C++ engine (optional)
 
-On Intel Macs, `pip install --only-binary cryptography -r server/requirements.txt`
-avoids a source build of `cryptography`.
-
-## Engine & Trading (A)
-
-### Building the engine
-
-The C++ order book in `book/OrderBook` is built with CLion's bundled toolchain (no cmake/g++ on PATH needed). From Git Bash:
+The app falls back to a pure-Python order book with the same protocol if the exe is missing.
+With CLion's bundled toolchain, from Git Bash:
 
 ```bash
 cd book/OrderBook
 export PATH="/c/Program Files/JetBrains/CLion 2026.2.0.1/bin/mingw/bin:$PATH"
 CM="/c/Program Files/JetBrains/CLion 2026.2.0.1/bin/cmake/win/x64/bin/cmake.exe"
-"$CM" -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug   # Debug keeps assert() live in the tests
-"$CM" --build build -j 8
-./build/OrderBookTests.exe                                          # "All tests passed."
-./build/MarketServer.exe < tests/protocol_input.txt | diff --strip-trailing-cr tests/expected_output.txt - && echo PROTOCOL OK
+"$CM" -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug
+"$CM" --build build -j 8 && ./build/OrderBookTests.exe
 ```
 
-`build/MarketServer.exe` (+ `libwinpthread-1.dll`, copied next to it by CMake) is what `ENGINE_PATH` points at.
-If the exe is missing, `server/engine.py` logs an error and falls back to a pure-Python book with the same protocol, so the app still runs. Use the real engine for the demo.
-
-Trading tests (fake in-memory db; run against both the Python fallback and the C++ exe if built):
+### Tests
 
 ```bash
-python -m pytest server/tests/test_trading*.py -q
+python -m pytest server/tests -q   # 90+ tests, in-memory DB, against both engines
+python -m pytest tests/db -v       # against the real database (tagged rows only)
 ```
 
-### Matching engine & market mechanics
+Includes a randomised 300-order run checking that positions net to zero, no one's available cash
+goes negative and the engine and database books agree, and an 8-client HTTP stress test with the
+market maker running.
 
-- One YES order book per candidate market, inside one `MarketServer.exe` process that `server/engine.py` drives over stdin/stdout (protocol: `plan/COLLAB.txt` section 8).
-- The engine only matches. Python/Postgres own cash and positions: `trading.place_order` validates, runs the risk check, sends the order to the engine and writes every fill in one DB transaction. If that transaction fails, the engine is restarted and replayed from the DB's open orders.
-- **NO is a view on the YES book:** Buy NO @ p = Sell YES @ (100 − p), Sell NO @ p = Buy YES @ (100 − p).
-- **Collateral:** an open buy locks price × qty, a short YES position locks 100 per share, and an open sell locks (100 − price) per share that a long position doesn't cover. `available = cash − locked`; orders that would make it negative are rejected before reaching the engine.
-- Changes to the owner's C++ (kept minimal, no changes to the matching logic, AVL tree or lists):
-  1. `TraderAlgo(book, noOfTraders = 100)`: the server creates 0 random traders.
-  2. `TraderAlgo::getTrader` creates unknown traders on first use (it used to return nullptr and crash for web users).
-  3. `OrderBook::fills`: each of the 4 matching loops appends a `Fill` so the server can report trades.
-  4. `OrderTree::collectLowest/HighestLevels` + `OrderBook::getDepth`: same traversal as the print functions, for the BOOK command.
-  5. `OrderBook::getRestingQty(orderID)`: needed because fully filled incoming orders are deleted.
-  6. The "Invalid cancel ID" print goes to stderr so it can't corrupt the protocol stream.
-- House market maker (`server/mm_bot.py`): every 10 s it quotes 50 @ fair ± 2 in every open candidate market. Fair = AI prior until the market trades, then an EMA of trades pulled 10% toward the prior, normalised so each race sums to 100 × seats, and skewed against the house's inventory.
+## Market mechanics
 
-## Data & TIME (B)
+- **NO is a view on the YES book:** Buy NO @ p = Sell YES @ (100 − p).
+- **Collateral:** an open buy locks price × qty, a short YES position locks 100 per share, and
+  an open sell locks (100 − price) per share not covered by a long position. Orders that would
+  make `cash − locked` negative are rejected before they reach the engine.
+- **Market maker:** quotes 50 @ fair ± 2 every 10 s. Fair = the prior (Gemini or the Isis model)
+  until the market trades, then an EMA of trades pulled toward the prior. Prices in a match are
+  normalised to sum to 100, and quotes lean against the house's inventory.
+- **Minimal C++ changes** to the original order book: lazy trader creation, a fill log from the
+  four matching loops, depth collection for the BOOK command, resting-quantity lookup, and
+  errors moved to stderr. The matching logic itself is unchanged.
 
-_TODO (B): schema, data APIs, jobs, seed data._
+## Repo map
 
-## TimescaleDB usage
+| Path | What |
+|---|---|
+| `server/` | Flask app, trading layer, DB access, jobs, Gemini, Isis market, scraper |
+| `book/OrderBook/` | C++ order book + `MarketServer` protocol wrapper |
+| `web/` | the site: matches, market, Isis, Time Machine, leaderboard, portfolio, admin |
+| `isis predictor/` | flag data, the linear regression (`model.py`) and an experimental neural-net forecaster |
+| `plan/`, `DEVLOG.md` | how three parallel workstreams built this during the hackathon |
 
-_TODO (B7)_
-
-## Content, AI & Web (C)
-
-_TODO (C)_
+*Play money only. The Isis forecast is not official OURCs guidance; always check the flag before boating.*
