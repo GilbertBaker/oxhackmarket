@@ -36,7 +36,9 @@ Everything is stored in the database (schema `oxmarket`):
   outcomes, N winners). Publish now or save as a draft.
 - **News articles**: Cherwell and Oxford Student headlines scraped from their RSS feeds
   (`server/scraper.py`). Turn one into a market (linked to its source) or dismiss it. With a
-  `GEMINI_API_KEY`, Gemini proposes markets from new articles as drafts.
+  `GEMINI_API_KEY` and `AI_PROPOSALS=1` (off by default), Gemini proposes markets from new
+  articles as drafts. Gemini also writes the match briefs and daily digest (`FAKE_AI=0`); the
+  free tier is 20 requests/day per model, so briefs are rewritten at most every 6 hours.
 - **Reference data**: terms, categories, competitions, teams and sports tables.
 - **Settings**: the `settings` table (market maker size / spread / interval, job intervals,
   starting cash, default rules and odds). Changes apply within ~30 s, no restart.
