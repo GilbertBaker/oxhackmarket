@@ -21,6 +21,13 @@ For a demo, also run `python server/demo.py` (with the app stopped). It creates 
 house-vs-house trades) for every open market, back-dating the markets so charts, 24h moves
 and the Time Machine have data. It is safe to re-run: markets that already have history are skipped.
 
+**Isis rowing (`/isis.html`)**: a daily "Can you row on the Isis tomorrow?" market, resolved
+from the official OURCs flag at 07:00 (YES = Green / Light Blue / Dark Blue). The linear regression
+in `isis predictor/model.py` (07:00 weather + yesterday's flag) sets the market maker's opening
+price; the page shows its call, inputs, per-input effects, test accuracy, the last 7 days and a
+Gemini summary. A background job resolves finished days and opens the next one
+(`server/isis.py`). Demo backfill (app stopped): `python server/isis.py --backfill`.
+
 Set `DISABLE_JOBS=0` in `.env` for the real thing: the market maker, price ticks,
 auto-close, portfolio snapshots and the news scraper all run as background jobs.
 Admins are the usernames listed in `ADMIN_USERNAMES` when they register.

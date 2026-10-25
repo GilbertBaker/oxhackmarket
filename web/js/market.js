@@ -20,6 +20,13 @@
   function start() {
     if (!id) { notFound(); return; }
     loadMarket().then(() => {
+      if (race && race.category === "isis") {
+        const el = document.createElement("div");
+        el.className = "banner";
+        el.style.margin = "0 0 14px";
+        el.innerHTML = `🚣 Daily Isis market. <a href="isis.html">See the flag model and AI summary →</a>`;
+        $("#market-root").insertBefore(el, $("#market-root").children[1]);
+      }
       setOutcome(T.outcome);
       poll(fast, 2000);
       poll(slow, 10000);

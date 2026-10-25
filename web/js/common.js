@@ -126,7 +126,7 @@
   ];
   // Category icons for non-match markets; categories, sports and their patterns come from
   // /api/meta (the reference tables) once loaded, the lists above are the offline fallback.
-  const CAT_ICONS = { news: "📰", union: "🏛️", university: "🎓", other: "❓", cuppers: "🏆" };
+  const CAT_ICONS = { news: "📰", union: "🏛️", university: "🎓", other: "❓", cuppers: "🏆", isis: "🚣" };
   function sportOf(position, race) {
     if (race && race.kind && race.kind !== "match") {
       const cat = (App.meta && App.meta.categories.find((c) => c.slug === race.category)) || null;
@@ -191,7 +191,7 @@
   // ------------------------------------------------------------ navbar
   const App = { user: null, ready: Promise.resolve(null) };
   const LINKS = [
-    ["markets", "index.html", "Matches"], ["timemachine", "timemachine.html", "Time Machine"],
+    ["markets", "index.html", "Matches"], ["isis", "isis.html", "Isis 🚣"], ["timemachine", "timemachine.html", "Time Machine"],
     ["leaderboard", "leaderboard.html", "Leaderboard"], ["portfolio", "portfolio.html", "Portfolio"],
   ];
   function initNav(active) {

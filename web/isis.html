@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Isis rowing · OxMarket</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230b2a66%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27Arial%27 font-size=%2712%27 font-weight=%27700%27 fill=%27white%27 text-anchor=%27middle%27%3EOX%3C/text%3E%3C/svg%3E">
+<style>
+  .flag-sw { display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-1px; margin-right:6px; border:1px solid #0002; }
+  .days { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:10px; }
+  .day { border:1px solid #e3e7ef; border-radius:10px; padding:10px; text-decoration:none; color:inherit; display:block; }
+  .day .res { font-weight:700; font-size:18px; }
+  .day .res.yes { color:#12805c; } .day .res.no { color:#c0392b; }
+  .bars .row { display:grid; grid-template-columns:110px 1fr 48px; gap:8px; align-items:center; margin:4px 0; font-size:14px; }
+  .bars .track { background:#eef1f6; border-radius:4px; height:12px; overflow:hidden; }
+  .bars .fill { height:100%; }
+  .hero-price { display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; }
+  .hero-price a { flex:1; min-width:140px; text-align:center; padding:14px; border-radius:10px; text-decoration:none; font-weight:700; font-size:18px; }
+  .buy-yes { background:#e6f5ee; color:#12805c; } .buy-no { background:#fbeaea; color:#c0392b; }
+  .summary { white-space:pre-wrap; line-height:1.55; }
+  code.f { background:#f3f5f9; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="nav"></div>
+<main class="wrap">
+  <div class="eyebrow">Isis rowing · daily market</div>
+  <h1 id="q">Can you row on the Isis tomorrow?</h1>
+  <p class="muted" style="margin-top:6px">A new market opens every morning at 07:00 and resolves the next day from the official
+    OURCs Isis flag at 07:00. <b>YES</b> = Green, Light Blue or Dark Blue (college crews can go out).</p>
+
+  <div class="grid-2" style="margin-top:20px;align-items:start">
+    <section class="card card-pad">
+      <h2>Tomorrow's market</h2>
+      <div id="current"><p class="muted">Loading…</p></div>
+      <div class="chart-box" style="height:220px;margin-top:14px"><canvas id="isis-chart" role="img" aria-label="Market chance and model call over time"></canvas></div>
+    </section>
+    <section class="card card-pad">
+      <h2>AI summary</h2>
+      <p class="tiny faint">Written by Gemini from the flag, weather, model and market data on this page.</p>
+      <div id="summary" class="summary" aria-live="polite"><p class="muted">Loading…</p></div>
+      <button class="btn btn-ghost btn-sm" id="summary-refresh" type="button" style="margin-top:10px">Refresh summary</button>
+      <div id="summary-msg" class="tiny"></div>
+    </section>
+  </div>
+
+  <section class="card card-pad" style="margin-top:20px">
+    <h2>Last 7 days</h2>
+    <p class="tiny faint">Each day's market, the official 07:00 flag it resolved on, and whether the model called it.</p>
+    <div class="days" id="days"></div>
+  </section>
+
+  <div class="grid-2" style="margin-top:20px;align-items:start">
+    <section class="card card-pad">
+      <h2>The model's call</h2>
+      <div id="model-call"><p class="muted">Loading…</p></div>
+    </section>
+    <section class="card card-pad">
+      <h2>How the model works</h2>
+      <div id="model-info"></div>
+    </section>
+  </div>
+</main>
+<footer class="site-foot"><div class="wrap">A forecast for a play-money market, not official OURCs guidance. Always check the official flag before boating.</div></footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/api.js"></script>
+<script src="js/common.js"></script>
+<script src="js/isis.js"></script>
+</body>
+</html>

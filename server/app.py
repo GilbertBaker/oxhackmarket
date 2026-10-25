@@ -41,6 +41,7 @@ import admin_api  # noqa: E402
 import content_api  # noqa: E402
 import data_api  # noqa: E402
 import db  # noqa: E402
+import isis  # noqa: E402
 import jobs  # noqa: E402
 import trading  # noqa: E402
 import trading_api  # noqa: E402
@@ -69,6 +70,7 @@ def create_app():
     app.register_blueprint(trading_api.bp)
     app.register_blueprint(data_api.bp)
     app.register_blueprint(content_api.bp)
+    app.register_blueprint(isis.bp)
     admin_api.init_app(app)
 
     @app.errorhandler(404)
@@ -89,6 +91,7 @@ def create_app():
         _safe("trading.start_background", trading.start_background)
         _safe("jobs.start_background", jobs.start_background)
         _safe("content.start_background", content.start_background)
+        _safe("isis.start_background", isis.start_background)
     else:
         log.info("DISABLE_JOBS=1: background jobs not started")
     return app
